@@ -1,0 +1,21 @@
+[package]
+name = "cofre-types"
+description = "Typed secret-materialization primitives (generation policies, rotation policies, backend refs, materialization plans). The lib half of the cofre toolchain."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
