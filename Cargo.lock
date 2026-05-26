@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "akeyless-api"
 version = "0.1.0"
+source = "git+https://github.com/pleme-io/akeyless-api?branch=main#d5b36c6f00185931bde5d73bf643041f692c40f5"
 dependencies = [
  "reqwest",
  "serde",
