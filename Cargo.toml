@@ -47,7 +47,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process
 tempfile = "3"
 
 # Akeyless API SDK — direct HTTPS calls, no argv exposure
-akeyless-api = { path = "../akeyless-api" }
+akeyless-api = { git = "https://github.com/pleme-io/akeyless-api", branch = "main" }
 
 [profile.release]
 codegen-units = 1
