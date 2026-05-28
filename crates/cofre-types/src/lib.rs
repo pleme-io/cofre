@@ -199,7 +199,7 @@ impl RotationPolicy {
 // BackendKind — where the materialized value lives
 // ══════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, gen_platform::TypedDispatcher)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum BackendKind {
     /// SOPS-encrypted YAML/JSON file, with the secret stored at a
@@ -240,6 +240,12 @@ impl BackendKind {
         matches!(self, Self::Mock { .. })
     }
 }
+
+// Fleet-wide dispatcher-catalog registration for the cofre secret-
+// source surface. Substrate gains typed coverage over the resource
+// side of secret materialization — same algebraic laws apply.
+// See theory/UNIFIED-COMPUTING-MODEL.md §VI.
+gen_platform::register_dispatcher!("cofre.backend-kind", BackendKind);
 
 // ══════════════════════════════════════════════════════════════════════
 // SecretRef — a typed pointer to one secret
