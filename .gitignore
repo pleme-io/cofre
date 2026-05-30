@@ -4,3 +4,4 @@ Cargo.lock.local
 .direnv
 result
 result-*
+Cargo.build-spec.json
