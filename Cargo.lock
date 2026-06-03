@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "akeyless-api"
 version = "0.1.0"
-source = "git+https://github.com/pleme-io/akeyless-api?branch=main#2a5de9e3ceabf31d2fac8478f65abb7880853a15"
+source = "git+https://github.com/pleme-io/akeyless-api?branch=main#87e7f7ed798a067f1332f7848ba25bea5c0fd482"
 dependencies = [
  "reqwest",
  "serde",
@@ -423,8 +423,8 @@ dependencies = [
 
 [[package]]
 name = "gen-macros"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.8"
+source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -433,8 +433,8 @@ dependencies = [
 
 [[package]]
 name = "gen-platform"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.8"
+source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
 dependencies = [
  "gen-macros",
  "gen-types",
@@ -446,8 +446,8 @@ dependencies = [
 
 [[package]]
 name = "gen-types"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.8"
+source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
 dependencies = [
  "blake3",
  "chrono",
