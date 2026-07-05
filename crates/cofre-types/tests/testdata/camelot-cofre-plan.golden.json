@@ -1,0 +1,247 @@
+{
+  "apiVersion": "pleme.io/v1",
+  "kind": "SecretMaterializationPlan",
+  "metadata": {
+    "name": "camelot",
+    "description": "Camelot born-locked secret materialization — cofre owns secret BIRTH; ESO (ClusterSecretStore(Akeyless)) reconciles into the k8s Secrets the pods mount. No stringData Secret is hand-applied.",
+    "source": "camelot-bootstrap/cofre_plan.go CofrePlanFor"
+  },
+  "secrets": [
+    {
+      "name": "mysql-root-password",
+      "description": "MySQL root@'%' password — db_pwd for every service + every inter-service \u003cx\u003e_db_pwd handle (akeyless-mysql-root/root-password).",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/mysql/root-password"
+      },
+      "generation": {
+        "kind": "password-random",
+        "length": 24,
+        "charset": "alphanumeric"
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "mysql",
+        "db"
+      ]
+    },
+    {
+      "name": "db-encryption-key",
+      "description": "INTERIM cofre stored secret (AES-256 DEK). Selo custody destination is KFM-SPLIT (uam checkUamDbEncryptKey derives fragments across kfm1db/kfm2db), NOT an ESO-materialized stored secret — do not enshrine.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/akeyless/db-encryption-key"
+      },
+      "generation": {
+        "kind": "pre-shared-key",
+        "length_bytes": 32
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "dek",
+        "interim"
+      ]
+    },
+    {
+      "name": "rustfs-access-key",
+      "description": "rustfs S3 access key id (aws_s3_access_key_id).",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/rustfs/access-key"
+      },
+      "generation": {
+        "kind": "token",
+        "length": 20
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "s3",
+        "rustfs"
+      ]
+    },
+    {
+      "name": "rustfs-secret-key",
+      "description": "rustfs S3 secret key (aws_s3_access_key).",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/rustfs/secret-key"
+      },
+      "generation": {
+        "kind": "token",
+        "length": 32
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "s3",
+        "rustfs"
+      ]
+    },
+    {
+      "name": "neo4j-password",
+      "description": "Neo4j requirepass — also sdr's sdr_db_pwd (one material, two consume sites).",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/neo4j/password"
+      },
+      "generation": {
+        "kind": "password-random",
+        "length": 24,
+        "charset": "alphanumeric"
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "neo4j",
+        "graph"
+      ]
+    },
+    {
+      "name": "uam-redis-password",
+      "description": "requirepass for uam's dedicated TLS redis (camelot-uam-redis) — uam-secret.conf redis_password.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/uam/redis-password"
+      },
+      "generation": {
+        "kind": "password-random",
+        "length": 24,
+        "charset": "alphanumeric"
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "uam",
+        "redis"
+      ]
+    },
+    {
+      "name": "uam-auth-shared-encryption-key",
+      "description": "AES-SIV key shared by auth+uam for the create-account ceremony (uam_auth_shared_encryption_key). PreSharedKey materializes url-safe base64 (32 bytes) — +//-free by construction; the akeyless decode variant is a live-verify.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/uam/auth-shared-encryption-key"
+      },
+      "generation": {
+        "kind": "pre-shared-key",
+        "length_bytes": 32
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "aes-siv",
+        "shared"
+      ]
+    },
+    {
+      "name": "stats-splunk-token",
+      "description": "bis stats_splunk_token (a dummy interim token today; a real Splunk HEC token in a wired env).",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/bis/stats-splunk-token"
+      },
+      "generation": {
+        "kind": "token",
+        "length": 32
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "bis",
+        "splunk"
+      ]
+    },
+    {
+      "name": "uam-api-key",
+      "description": "uam service RSA private half (uam-secret.conf api_key). PROCEDURAL residue — born by the uam-access provision step's RSA keypair, NOT by cofre; cofre tracks + verifies the path only.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/uam/api-key"
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "uam",
+        "procedural"
+      ]
+    },
+    {
+      "name": "uam-access-id",
+      "description": "uam service access_id (uam-secret.conf access_id). DETERMINISTIC (UamAccessID(env)) — cofre tracks, does not birth.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/uam/access-id"
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "uam",
+        "procedural"
+      ]
+    },
+    {
+      "name": "gateway-access-key",
+      "description": "akeyless-gateway-creds gateway-access-key = the admin RSA private half — client-owned, known offline (the create-account admin keypair); cofre tracks, does not birth.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/gateway/access-key"
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "gateway",
+        "procedural"
+      ]
+    },
+    {
+      "name": "gateway-access-id",
+      "description": "akeyless-gateway-creds gateway-access-id = the ceremony-returned AdminAccessID (server-generated, NOT known offline). LiveTODO: the create-account ceremony returns it, then cofre writes it to this path, then ESO materializes akeyless-gateway-creds.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/gateway/access-id"
+      },
+      "rotation": "never",
+      "labels": [
+        "camelot",
+        "camelot",
+        "gateway",
+        "ceremony-output"
+      ]
+    },
+    {
+      "name": "rabbitmq-admin-password",
+      "description": "akeyless-rabbitmq-admin password — RABBIT-ERA. Retired by drift instance #1 (rabbit→nats/escuta); covered for the rabbit era, not enshrined.",
+      "backend": {
+        "kind": "akeyless",
+        "path": "/camelot/camelot/rabbitmq/admin-password"
+      },
+      "generation": {
+        "kind": "password-random",
+        "length": 24,
+        "charset": "alphanumeric"
+      },
+      "rotation": "quarterly",
+      "labels": [
+        "camelot",
+        "camelot",
+        "rabbitmq",
+        "retired-by-nats-cutover"
+      ]
+    }
+  ],
+  "test_only": false
+}
