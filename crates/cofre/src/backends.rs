@@ -283,10 +283,13 @@ impl SopsBackend {
     /// invocation. This is the multi-secret entry point the CLI uses;
     /// the per-secret `SecretBackend::write` exists too but is less
     /// efficient (one sops invocation per secret).
+    /// Returns `true` when the batch wrote at least one new value,
+    /// `false` when every entry in the batch was already present (an
+    /// idempotent no-op — sops's own exit 200, "file has not changed").
     pub async fn apply_batch(
         &self,
         plan_slice: &[SopsHookEntry],
-    ) -> Result<(), BackendError> {
+    ) -> Result<bool, BackendError> {
         // Write the plan slice (no secrets, just policy) to a 0600
         // tempfile that the hook child reads.
         let mut tmp = tempfile::Builder::new()
@@ -316,12 +319,23 @@ impl SopsBackend {
         // Drop tmpfile (auto-unlinks).
         drop(tmp);
 
+        // sops's own documented convention: exit 200 means the editor
+        // hook made no changes to the plaintext (every entry in this
+        // batch was already present and none carried `force: true`) --
+        // an idempotent no-op, not a failure. Only run_editor_hook can
+        // produce this: it computes `wrote_any` and never touches the
+        // plaintext file when it's false, which is exactly what leaves
+        // sops with nothing to re-encrypt.
+        const SOPS_NO_CHANGES: i32 = 200;
+        if status.code() == Some(SOPS_NO_CHANGES) {
+            return Ok(false);
+        }
         if !status.success() {
             return Err(BackendError::Io(format!(
                 "sops exited with {status:?}"
             )));
         }
-        Ok(())
+        Ok(true)
     }
 }
 

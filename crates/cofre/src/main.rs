@@ -235,12 +235,17 @@ async fn cmd_apply(manifest: &str, rotate: Option<&str>, mock: bool) -> i32 {
                 continue;
             }
         };
-        if let Err(e) = backend.apply_batch(entries).await {
-            eprintln!("error: sops apply for {file}: {e}");
-            errored += entries.len();
-            continue;
+        match backend.apply_batch(entries).await {
+            Ok(true) => wrote += entries.len(),
+            // Idempotent no-op: every entry in this file's batch was
+            // already present and none carried force -- correctly
+            // "skipped", not an error and not a write.
+            Ok(false) => skipped += entries.len(),
+            Err(e) => {
+                eprintln!("error: sops apply for {file}: {e}");
+                errored += entries.len();
+            }
         }
-        wrote += entries.len();
     }
 
     println!(
