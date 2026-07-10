@@ -938,4 +938,31 @@ mod tests {
         assert_eq!(RotationPolicy::Yearly.overdue_after_days(), Some(365));
         assert_eq!(RotationPolicy::Never.overdue_after_days(), None);
     }
+
+    /// theory/SELF-BOOTSTRAP-AKEYLESS.md's M0 step 1 -- the typed
+    /// SecretMaterializationPlan declaring Camelot's real bootstrap
+    /// secrets (mirroring camelot-bootstrap/secrets.go's exact
+    /// defaultSpec/GenerateSecureSecrets shape) validates against cofre's
+    /// real, unmocked SecretMaterializationPlan::validate() -- the same
+    /// path `cofre plan --manifest <path>` runs. Data-only: this test
+    /// proves the plan is well-formed, it never generates or applies a
+    /// live secret. The plan file lives in the nix repo (not this one)
+    /// since it's fleet config, not a cofre-owned artifact -- read here
+    /// by absolute path as the pragmatic verification seam given the nix
+    /// repo isn't a Cargo workspace.
+    #[test]
+    fn camelot_bootstrap_plan_validates() {
+        let path = "/Users/luis.d/code/github/pleme-io/nix/cofre-plans/camelot-bootstrap.yaml";
+        let body = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let plan = SecretMaterializationPlan::from_yaml(&body)
+            .unwrap_or_else(|e| panic!("camelot-bootstrap.yaml failed validation: {e}"));
+        assert_eq!(plan.metadata.name, "camelot-dev-bootstrap");
+        assert_eq!(plan.secrets.len(), 7);
+        assert!(!plan.test_only);
+        for s in &plan.secrets {
+            assert!(matches!(s.backend, BackendKind::Sops { .. }));
+            assert_eq!(s.rotation, RotationPolicy::Quarterly);
+        }
+    }
 }
