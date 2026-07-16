@@ -145,7 +145,7 @@
     },
     {
       "name": "stats-splunk-token",
-      "description": "bis stats_splunk_token (a dummy interim token today; a real Splunk HEC token in a wired env).",
+      "description": "bis stats_splunk_token — MUST equal Vector's splunk_hec valid_tokens allowlist (\"x\" today), not a randomly-generated secret. Bridges bis's Splunk-HEC-shaped stats into Vector -\u003e ClickHouse/VictoriaLogs; no real Splunk involved.",
       "backend": {
         "kind": "akeyless",
         "path": "/camelot/camelot/bis/stats-splunk-token"
@@ -154,12 +154,12 @@
         "kind": "token",
         "length": 32
       },
-      "rotation": "quarterly",
+      "rotation": "never",
       "labels": [
         "camelot",
         "camelot",
         "bis",
-        "splunk"
+        "vector-hec"
       ]
     },
     {
