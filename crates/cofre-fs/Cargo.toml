@@ -1,0 +1,22 @@
+[package]
+name = "cofre-fs"
+description = "Atomic secret-file creation: the mode is established at open(2), never chmod'ed afterwards. The one correct way for any pleme-io tool to write a credential to disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# Intentionally dependency-free. Consumers of this primitive should not have
+# to take on a dependency tree to write a file, and `std` covers it.
+#
+# Not in the `cofre` binary crate (`[[bin]]`-only, so nothing can depend on
+# it) and not in `cofre-types` (whose charter is types with no I/O).
+[dependencies]
+
+[dev-dependencies]
