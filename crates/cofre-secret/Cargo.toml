@@ -1,0 +1,25 @@
+[package]
+name = "cofre-secret"
+description = "A credential type that cannot reach argv, a log line, or a format string by accident, plus the sanctioned ways to hand one to a subprocess."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# Dependency-free, for the same reason as cofre-fs: the consumers that need
+# this are the ones least willing to take on a dependency tree, and reaching
+# for a plain String is always the easier alternative.
+#
+# Deliberately no serde. A `Secret` that serializes to "***" still compiles
+# inside a `#[derive(Serialize)]` struct; one with no impl at all does not,
+# which turns "is this field safe to serialize?" into a question the author
+# must answer rather than one the type answers for them.
+[dependencies]
+
+[dev-dependencies]

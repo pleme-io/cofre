@@ -246,6 +246,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cofre-fs"
+version = "0.1.0"
+
+[[package]]
+name = "cofre-secret"
+version = "0.1.0"
+
+[[package]]
 name = "cofre-types"
 version = "0.1.0"
 dependencies = [
