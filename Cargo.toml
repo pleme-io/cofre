@@ -31,8 +31,8 @@ cofre-types = { path = "crates/cofre-types", version = "0.1.1" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
-gen-platform = { git = "https://github.com/pleme-io/gen", version = "0.1" }
-gen-types = { git = "https://github.com/pleme-io/gen", version = "0.1" }
+gen-platform = "0.1"
+gen-types = "0.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -57,7 +57,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process
 tempfile = "3"
 
 # Akeyless API SDK — direct HTTPS calls, no argv exposure
-akeyless-api = { git = "https://github.com/pleme-io/akeyless-api", branch = "main", version = "0.1" }
+akeyless-api = { version = "0.1", optional = true }
 
 [profile.release]
 codegen-units = 1
