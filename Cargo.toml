@@ -15,6 +15,9 @@ license = "MIT OR Apache-2.0"
 homepage = "https://github.com/pleme-io/cofre"
 repository = "https://github.com/pleme-io/cofre"
 authors = ["pleme-io"]
+readme = "README.md"
+categories = ["cryptography", "filesystem"]
+keywords = ["secrets", "sops", "akeyless", "security", "pleme-io"]
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -24,12 +27,12 @@ module_name_repetitions = "allow"
 
 [workspace.dependencies]
 # Workspace crates
-cofre-types = { path = "crates/cofre-types" }
+cofre-types = { path = "crates/cofre-types", version = "0.1.0" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
-gen-platform = { git = "https://github.com/pleme-io/gen" }
-gen-types = { git = "https://github.com/pleme-io/gen" }
+gen-platform = { git = "https://github.com/pleme-io/gen", version = "0.1" }
+gen-types = { git = "https://github.com/pleme-io/gen", version = "0.1" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -54,7 +57,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process
 tempfile = "3"
 
 # Akeyless API SDK — direct HTTPS calls, no argv exposure
-akeyless-api = { git = "https://github.com/pleme-io/akeyless-api", branch = "main" }
+akeyless-api = { git = "https://github.com/pleme-io/akeyless-api", branch = "main", version = "0.1" }
 
 [profile.release]
 codegen-units = 1
