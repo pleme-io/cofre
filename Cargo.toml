@@ -56,8 +56,27 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process
 # Atomic temp files for SOPS hijack
 tempfile = "3"
 
-# Akeyless API SDK — direct HTTPS calls, no argv exposure
-akeyless-api = { version = "0.1", optional = true }
+# Akeyless API SDK — direct HTTPS calls, no argv exposure.
+#
+# ── ★ NO `optional` HERE — CARGO REJECTS IT AND THE WHOLE WORKSPACE DIED ──
+# `[workspace.dependencies]` entries cannot be optional; the flag belongs on the
+# MEMBER's own entry, which already carries it
+# (crates/cofre/Cargo.toml:31 — `{ workspace = true, optional = true }`, feeding
+# the `akeyless = ["dep:akeyless-api"]` feature). Duplicating it up here is a
+# hard manifest error, not a warning:
+#
+#   error: failed to parse manifest at `cofre/Cargo.toml`
+#   Caused by: akeyless-api is optional, but workspace dependencies cannot be
+#   optional
+#
+# MEASURED 2026-08-05: this made `cofre` unbuildable — every cargo command in
+# the workspace failed at manifest parse, before any compilation. It also broke
+# every repo that path-depends on it: `arch-synthesizer` -> `pangea-forge` could
+# not resolve `cofre-types` at all, so the generator that emits fleet repos was
+# itself unbuildable. Found only while fixing an unrelated bug in that
+# generator; nothing reported it, because a manifest error surfaces as "failed
+# to load source for dependency" several repos downstream of the actual cause.
+akeyless-api = { version = "0.1" }
 
 [profile.release]
 codegen-units = 1

@@ -128,10 +128,7 @@ pub enum SecretGenPolicy {
     SshKeypair { algo: SshAlgo },
     /// A self-signed TLS keypair, valid `validity_days` from generation.
     /// Materializes `<path>.key` (PEM) + `<path>.crt` (PEM).
-    TlsKeypair {
-        algo: TlsAlgo,
-        validity_days: u32,
-    },
+    TlsKeypair { algo: TlsAlgo, validity_days: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -199,7 +196,9 @@ impl RotationPolicy {
 // BackendKind — where the materialized value lives
 // ══════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, gen_platform::TypedDispatcher)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, gen_platform::TypedDispatcher,
+)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum BackendKind {
     /// SOPS-encrypted YAML/JSON file, with the secret stored at a
@@ -413,11 +412,14 @@ pub enum PlanError {
 }
 
 fn is_slug(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn is_token_prefix(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 impl SecretMaterializationPlan {
@@ -681,7 +683,10 @@ mod tests {
             "dup",
             vec![akeyless_password("foo", 16), akeyless_password("foo", 16)],
         );
-        assert!(matches!(p.validate(), Err(PlanError::DuplicateSecretName(_))));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::DuplicateSecretName(_))
+        ));
     }
 
     #[test]
@@ -710,7 +715,10 @@ mod tests {
     fn unsupported_apiversion_rejected() {
         let mut p = ryn_plan();
         p.api_version = "wrong/v0".into();
-        assert!(matches!(p.validate(), Err(PlanError::UnsupportedApiVersion(_))));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::UnsupportedApiVersion(_))
+        ));
     }
 
     #[test]
@@ -725,7 +733,10 @@ mod tests {
         let mut s = akeyless_password("foo", 16);
         s.backend = BackendKind::Mock { name: "x".into() };
         let p = SecretMaterializationPlan::new("prod", vec![s]);
-        assert!(matches!(p.validate(), Err(PlanError::MockBackendInProductionPlan)));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::MockBackendInProductionPlan)
+        ));
     }
 
     #[test]
@@ -748,7 +759,10 @@ mod tests {
             16,
         );
         let p = SecretMaterializationPlan::new("nonabs", vec![s]);
-        assert!(matches!(p.validate(), Err(PlanError::NonAbsoluteSopsFile(_))));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::NonAbsoluteSopsFile(_))
+        ));
     }
 
     #[test]
@@ -769,50 +783,46 @@ mod tests {
     fn invalid_akeyless_path_rejected() {
         let s = SecretRef::password(
             "foo",
-            BackendKind::Akeyless { path: "no-slash".into() },
+            BackendKind::Akeyless {
+                path: "no-slash".into(),
+            },
             16,
         );
         let p = SecretMaterializationPlan::new("invak", vec![s]);
-        assert!(matches!(p.validate(), Err(PlanError::InvalidAkeylessPath(_))));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::InvalidAkeylessPath(_))
+        ));
     }
 
     // ── Generation policy validation ───────────────────────────────────
 
     #[test]
     fn zero_length_password_rejected() {
-        let s = SecretRef::password(
-            "foo",
-            BackendKind::Akeyless { path: "/x".into() },
-            0,
-        );
+        let s = SecretRef::password("foo", BackendKind::Akeyless { path: "/x".into() }, 0);
         let p = SecretMaterializationPlan::new("zerolen", vec![s]);
         assert!(matches!(p.validate(), Err(PlanError::ZeroLengthPassword)));
     }
 
     #[test]
     fn password_exceeds_max_length_rejected() {
-        let s = SecretRef::capped_password(
-            "vnc",
-            BackendKind::Akeyless { path: "/x".into() },
-            32,
-            16,
-        );
+        let s =
+            SecretRef::capped_password("vnc", BackendKind::Akeyless { path: "/x".into() }, 32, 16);
         let p = SecretMaterializationPlan::new("toolong", vec![s]);
         assert!(matches!(
             p.validate(),
-            Err(PlanError::PasswordExceedsMaxLength { requested: 32, cap: 16 })
+            Err(PlanError::PasswordExceedsMaxLength {
+                requested: 32,
+                cap: 16
+            })
         ));
     }
 
     #[test]
     fn vnc_at_max_length_allowed() {
         // length == max_length is the BR canonical case for VNC.
-        let s = SecretRef::capped_password(
-            "vnc",
-            BackendKind::Akeyless { path: "/x".into() },
-            16,
-            16,
-        );
+        let s =
+            SecretRef::capped_password("vnc", BackendKind::Akeyless { path: "/x".into() }, 16, 16);
         let p = SecretMaterializationPlan::new("vnc", vec![s]);
         assert!(p.validate().is_ok());
     }
@@ -828,7 +838,10 @@ mod tests {
             labels: vec![],
         };
         let p = SecretMaterializationPlan::new("zeropsk", vec![s]);
-        assert!(matches!(p.validate(), Err(PlanError::ZeroLengthPreSharedKey)));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::ZeroLengthPreSharedKey)
+        ));
     }
 
     #[test]
@@ -862,7 +875,10 @@ mod tests {
             labels: vec![],
         };
         let p = SecretMaterializationPlan::new("badprefix", vec![s]);
-        assert!(matches!(p.validate(), Err(PlanError::InvalidTokenPrefix(_))));
+        assert!(matches!(
+            p.validate(),
+            Err(PlanError::InvalidTokenPrefix(_))
+        ));
     }
 
     // ── materialization_targets ────────────────────────────────────────
@@ -950,11 +966,38 @@ mod tests {
     /// since it's fleet config, not a cofre-owned artifact -- read here
     /// by absolute path as the pragmatic verification seam given the nix
     /// repo isn't a Cargo workspace.
+    /// ── ★ THE PATH IS DERIVED, AND ITS ABSENCE IS A SKIP, NOT A PANIC ─────
+    /// This read a hardcoded `/Users/luis.d/code/github/pleme-io/nix/...`, so it
+    /// could only ever pass on ONE operator's machine. It went unnoticed for a
+    /// different reason than usual: the workspace manifest had
+    /// `optional = true` on a `[workspace.dependencies]` entry, which Cargo
+    /// rejects outright, so NO test in this repo had ever run. Fixing the
+    /// manifest on 2026-08-05 made this the first-ever execution — and it
+    /// failed immediately, on another operator's home directory.
+    ///
+    /// The plan file genuinely lives in the sibling `nix` repo (fleet config,
+    /// not a cofre artifact), so the cross-repo read stays. What changes is how
+    /// it is located: derived from this crate's own manifest directory, which
+    /// tracks the checkout instead of one machine.
+    ///
+    /// And a missing sibling is now a SKIP with a printed reason rather than a
+    /// panic. A cross-repo fixture that is legitimately absent (a CI checkout of
+    /// cofre alone) is not a cofre defect, and turning it into a red test trains
+    /// people to ignore the suite — the failure mode this repo's own docs call
+    /// out elsewhere.
     #[test]
     fn camelot_bootstrap_plan_validates() {
-        let path = "/Users/luis.d/code/github/pleme-io/nix/cofre-plans/camelot-bootstrap.yaml";
-        let body = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../nix/cofre-plans/camelot-bootstrap.yaml");
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            eprintln!(
+                "SKIP camelot_bootstrap_plan_validates: the plan lives in the \
+                 sibling `nix` repo and is not present at {} — check out \
+                 pleme-io/nix beside this repo to exercise it",
+                path.display()
+            );
+            return;
+        };
         let plan = SecretMaterializationPlan::from_yaml(&body)
             .unwrap_or_else(|e| panic!("camelot-bootstrap.yaml failed validation: {e}"));
         assert_eq!(plan.metadata.name, "camelot-dev-bootstrap");

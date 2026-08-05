@@ -4,8 +4,9 @@ version = 4
 
 [[package]]
 name = "akeyless-api"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/akeyless-api?branch=main#87e7f7ed798a067f1332f7848ba25bea5c0fd482"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357249bf4e5c03bbe39dee4a8fa8ac07b8b47757520298d365341b22f04538a7"
 dependencies = [
  "reqwest",
  "serde",
@@ -229,7 +230,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cofre"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "akeyless-api",
  "blake3",
@@ -247,15 +248,15 @@ dependencies = [
 
 [[package]]
 name = "cofre-fs"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "cofre-secret"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "cofre-types"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "gen-platform",
  "gen-types",
@@ -431,8 +432,9 @@ dependencies = [
 
 [[package]]
 name = "gen-macros"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e87d6e8b417dad4ba0d2ed96c58c2cd7af538f592dcf698db0cd8480b08225ed"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -441,8 +443,9 @@ dependencies = [
 
 [[package]]
 name = "gen-platform"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "340242b11b413b24644f55a9dd7ffd05e371910a738ab52981a03a6ffedf6783"
 dependencies = [
  "gen-macros",
  "gen-types",
@@ -454,8 +457,9 @@ dependencies = [
 
 [[package]]
 name = "gen-types"
-version = "0.1.8"
-source = "git+https://github.com/pleme-io/gen#e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1efa39b439fd999e2f7454c08cb7a4d1f9e6e49ffa805557647f7f998caf7414"
 dependencies = [
  "blake3",
  "chrono",
