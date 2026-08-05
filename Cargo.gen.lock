@@ -1,16 +1,16 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "30c319913d298364f5597682e2975215dca71a6ec5ed5ca9228014ad8880a03d",
+  "cargo_lock_sha256": "44bf09188ed85ad9625badc2ac8c22fe3e55a385b4e08569114aa68fcbb98ce4",
   "manifest_sha256": {
-    "Cargo.toml": "f758a2d741e0544e0d56c48d00290309759ce1e84ca920d1895b20da4c6f6b08",
+    "Cargo.toml": "eeac3a581ea4bea3c5879f8b607cf0c698812479f12c2064cba1246b1f5a6883",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
-    "crates/cofre/Cargo.toml": "7a9d0c10a76de2d73338a494636440b19fb5ff7c8a731e84c62b0fb835b41e98"
+    "crates/cofre/Cargo.toml": "c75c4ddfe4868e20142e17b0969383fbd4c6ca1be7d5f10f1b1d718a3201e423"
   },
   "target_resolves": {
     "base": {
-      "akeyless-api-0.1.0-87e7f7ed798a067f1332f7848ba25bea5c0fd482": {
+      "akeyless-api-0.1.1": {
         "runtime_dependencies": [
           {
             "name": "reqwest",
@@ -475,15 +475,15 @@
         "build_dependencies": [],
         "features": []
       },
-      "cofre-0.1.1": {
+      "cofre-0.1.2": {
         "runtime_dependencies": [
           {
             "name": "akeyless_api",
-            "package_key": "akeyless-api-0.1.0-87e7f7ed798a067f1332f7848ba25bea5c0fd482",
+            "package_key": "akeyless-api-0.1.1",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
-            "optional": false,
+            "optional": true,
             "target": null,
             "tree": "target"
           },
@@ -512,7 +512,7 @@
           },
           {
             "name": "cofre_types",
-            "package_key": "cofre-types-0.1.1",
+            "package_key": "cofre-types-0.1.2",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -612,23 +612,26 @@
           }
         ],
         "build_dependencies": [],
-        "features": []
+        "features": [
+          "akeyless",
+          "default"
+        ]
       },
-      "cofre-fs-0.1.1": {
+      "cofre-fs-0.1.2": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-secret-0.1.1": {
+      "cofre-secret-0.1.2": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-types-0.1.1": {
+      "cofre-types-0.1.2": {
         "runtime_dependencies": [
           {
             "name": "gen_platform",
-            "package_key": "gen-platform-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3",
+            "package_key": "gen-platform-0.1.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -638,7 +641,7 @@
           },
           {
             "name": "gen_types",
-            "package_key": "gen-types-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3",
+            "package_key": "gen-types-0.1.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1057,7 +1060,7 @@
           "std"
         ]
       },
-      "gen-macros-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+      "gen-macros-0.1.34": {
         "runtime_dependencies": [
           {
             "name": "proc_macro2",
@@ -1096,11 +1099,11 @@
         "build_dependencies": [],
         "features": []
       },
-      "gen-platform-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+      "gen-platform-0.1.34": {
         "runtime_dependencies": [
           {
             "name": "gen_macros",
-            "package_key": "gen-macros-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3",
+            "package_key": "gen-macros-0.1.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1110,7 +1113,7 @@
           },
           {
             "name": "gen_types",
-            "package_key": "gen-types-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3",
+            "package_key": "gen-types-0.1.34",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1164,7 +1167,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "gen-types-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+      "gen-types-0.1.34": {
         "runtime_dependencies": [
           {
             "name": "blake3",
@@ -7042,7 +7045,7 @@
     }
   },
   "per_crate": {
-    "akeyless-api-0.1.0-87e7f7ed798a067f1332f7848ba25bea5c0fd482": {
+    "akeyless-api-0.1.1": {
       "edition": "2021"
     },
     "anstream-1.0.0": {
@@ -7116,7 +7119,7 @@
     "clap_lex-1.1.0": {
       "edition": "2024"
     },
-    "cofre-0.1.1": {
+    "cofre-0.1.2": {
       "edition": "2024",
       "binaries": [
         {
@@ -7125,21 +7128,21 @@
         }
       ]
     },
-    "cofre-fs-0.1.1": {
+    "cofre-fs-0.1.2": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_fs",
         "path": "src/lib.rs"
       }
     },
-    "cofre-secret-0.1.1": {
+    "cofre-secret-0.1.2": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_secret",
         "path": "src/lib.rs"
       }
     },
-    "cofre-types-0.1.1": {
+    "cofre-types-0.1.2": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_types",
@@ -7205,14 +7208,14 @@
     "futures-util-0.3.32": {
       "edition": "2018"
     },
-    "gen-macros-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+    "gen-macros-0.1.34": {
       "edition": "2024",
       "proc_macro": true
     },
-    "gen-platform-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+    "gen-platform-0.1.34": {
       "edition": "2024"
     },
-    "gen-types-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": {
+    "gen-types-0.1.34": {
       "edition": "2024"
     },
     "getrandom-0.2.17": {
@@ -7655,11 +7658,6 @@
       "build_script": "build.rs"
     }
   },
-  "git_nar_sha256": {
-    "akeyless-api-0.1.0-87e7f7ed798a067f1332f7848ba25bea5c0fd482": "sha256-UQB48j1SDYv45/WrQLWKevpv8/51N+DM67TZJ2xD4VU=",
-    "gen-macros-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": "sha256-hA8kXaLIsrlPaSGp+K2uHbD+Q9dkJwRAhZlgVdIDb/0=",
-    "gen-platform-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": "sha256-hA8kXaLIsrlPaSGp+K2uHbD+Q9dkJwRAhZlgVdIDb/0=",
-    "gen-types-0.1.8-e4759b7b81b3b4f9505f3723d33bcd7e522dd6c3": "sha256-hA8kXaLIsrlPaSGp+K2uHbD+Q9dkJwRAhZlgVdIDb/0="
-  },
+  "git_nar_sha256": {},
   "flake_metadata": {}
 }
