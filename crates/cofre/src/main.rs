@@ -70,9 +70,11 @@ fn main() {
     let exit_code = rt.block_on(async {
         match cli.command {
             Command::Plan { manifest } => cmd_plan(&manifest).await,
-            Command::Apply { manifest, rotate, mock } => {
-                cmd_apply(&manifest, rotate.as_deref(), mock).await
-            }
+            Command::Apply {
+                manifest,
+                rotate,
+                mock,
+            } => cmd_apply(&manifest, rotate.as_deref(), mock).await,
             Command::Verify { manifest, mock } => cmd_verify(&manifest, mock).await,
             Command::Inventory { manifest } => cmd_inventory(&manifest).await,
             Command::SopsEditorHook { path } => cmd_sops_editor_hook(&path),
@@ -101,7 +103,11 @@ async fn cmd_plan(manifest: &str) -> i32 {
     let Some(plan) = load_plan(manifest) else {
         return 2;
     };
-    println!("plan: {} ({} secret(s))", plan.metadata.name, plan.secrets.len());
+    println!(
+        "plan: {} ({} secret(s))",
+        plan.metadata.name,
+        plan.secrets.len()
+    );
     if let Some(src) = &plan.metadata.source {
         println!("source: {src}");
     }
@@ -146,13 +152,15 @@ async fn cmd_apply(manifest: &str, rotate: Option<&str>, mock: bool) -> i32 {
 
     // Akeyless backend (lazy-init only when needed).
     let mut akeyless: Option<backends::AkeylessBackend> = None;
-    let mock_backend = if mock { Some(backends::MockBackend::new()) } else { None };
+    let mock_backend = if mock {
+        Some(backends::MockBackend::new())
+    } else {
+        None
+    };
 
     // SOPS apply works in batches per file.
-    let mut sops_batches: std::collections::HashMap<
-        String,
-        Vec<backends::SopsHookEntry>,
-    > = std::collections::HashMap::new();
+    let mut sops_batches: std::collections::HashMap<String, Vec<backends::SopsHookEntry>> =
+        std::collections::HashMap::new();
 
     let argv0 = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("cofre"));
 
@@ -252,11 +260,7 @@ async fn cmd_apply(manifest: &str, rotate: Option<&str>, mock: bool) -> i32 {
         "wrote: {} | skipped: {} | errored: {} | (rotate: {:?})",
         wrote, skipped, errored, rotate
     );
-    if errored > 0 {
-        1
-    } else {
-        0
-    }
+    if errored > 0 { 1 } else { 0 }
 }
 
 async fn apply_one_via_backend(
@@ -296,7 +300,11 @@ async fn cmd_verify(manifest: &str, mock: bool) -> i32 {
             }
         }
     };
-    let mock_backend = if mock { Some(backends::MockBackend::new()) } else { None };
+    let mock_backend = if mock {
+        Some(backends::MockBackend::new())
+    } else {
+        None
+    };
 
     let mut missing = 0;
     let mut present = 0;
@@ -313,7 +321,10 @@ async fn cmd_verify(manifest: &str, mock: bool) -> i32 {
             BackendKind::Sops { .. } => {
                 // SOPS existence requires decryption; for verify we
                 // surface that distinction rather than running sops.
-                eprintln!("  ? {} (sops backend — `verify` doesn't decrypt; run `apply` for idempotent reconciliation)", s.name);
+                eprintln!(
+                    "  ? {} (sops backend — `verify` doesn't decrypt; run `apply` for idempotent reconciliation)",
+                    s.name
+                );
                 continue;
             }
         };
@@ -333,11 +344,7 @@ async fn cmd_verify(manifest: &str, mock: bool) -> i32 {
         }
     }
     println!("present: {} | missing: {}", present, missing);
-    if missing > 0 {
-        1
-    } else {
-        0
-    }
+    if missing > 0 { 1 } else { 0 }
 }
 
 async fn cmd_inventory(manifest: &str) -> i32 {
@@ -348,7 +355,9 @@ async fn cmd_inventory(manifest: &str) -> i32 {
     // For now we emit only the structural inventory (no value hashes —
     // that needs a per-backend `read_for_inventory` impl which is a
     // separate trait method we'll add when we ship rotation tracking).
-    eprintln!("note: inventory emits structural-only entries; value hashing lands when rotation tracking ships.");
+    eprintln!(
+        "note: inventory emits structural-only entries; value hashing lands when rotation tracking ships."
+    );
     let entries: Vec<inventory::InventoryEntry> = plan
         .secrets
         .iter()

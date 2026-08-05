@@ -51,7 +51,10 @@ fn the_old_pattern_opens_a_world_readable_window_and_the_new_one_does_not() {
         "the write-then-chmod final mode is correct, which is why asserting \
          only the final mode does not distinguish the two"
     );
-    assert_eq!(new_final, 0o600, "write_secret must land on the requested mode");
+    assert_eq!(
+        new_final, 0o600,
+        "write_secret must land on the requested mode"
+    );
 
     let _ = std::fs::remove_dir_all(&d);
 }

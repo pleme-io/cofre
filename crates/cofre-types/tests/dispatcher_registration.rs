@@ -15,12 +15,12 @@
 //! (saturation/determinism/idempotence/closure under composition).
 
 use cofre_types::BackendKind;
-use gen_platform::{catalog, TypedDispatcherTrait};
+use gen_platform::{TypedDispatcherTrait, catalog};
 
 #[test]
 fn backend_kind_registers_into_fleet_catalog() {
-    let entry = catalog::by_label("cofre.backend-kind")
-        .expect("cofre-types must register BackendKind");
+    let entry =
+        catalog::by_label("cofre.backend-kind").expect("cofre-types must register BackendKind");
     assert_eq!(entry.label, "cofre.backend-kind");
     assert_eq!((entry.variant_count)(), 3);
 }
@@ -70,10 +70,7 @@ fn backend_kind_serde_tags_match_reflection() {
     let reflected = BackendKind::variant_kinds();
     for (sample, expected_kind) in &samples {
         let v: serde_json::Value = serde_json::to_value(sample).unwrap();
-        assert_eq!(
-            v.get("kind").and_then(|k| k.as_str()),
-            Some(*expected_kind)
-        );
+        assert_eq!(v.get("kind").and_then(|k| k.as_str()), Some(*expected_kind));
         assert!(reflected.contains(expected_kind));
     }
 }

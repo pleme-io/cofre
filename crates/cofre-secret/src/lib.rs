@@ -365,7 +365,10 @@ mod tests {
     #[test]
     fn stdin_sink_actually_delivers_the_value() {
         let token = Secret::new(TOKEN).unwrap();
-        let out = SecureCommand::new("cat").stdin_secret(&token).output().unwrap();
+        let out = SecureCommand::new("cat")
+            .stdin_secret(&token)
+            .output()
+            .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), TOKEN);
     }
 
@@ -390,7 +393,10 @@ mod tests {
         ));
 
         unsafe { std::env::set_var("COFRE_SECRET_TEST_A", "") };
-        assert!(matches!(Secret::from_env("COFRE_SECRET_TEST_A"), Err(SecretError::Empty)));
+        assert!(matches!(
+            Secret::from_env("COFRE_SECRET_TEST_A"),
+            Err(SecretError::Empty)
+        ));
 
         unsafe { std::env::remove_var("COFRE_SECRET_TEST_A") };
     }

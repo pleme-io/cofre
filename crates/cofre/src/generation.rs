@@ -30,9 +30,9 @@ impl From<getrandom::Error> for GenerationError {
 /// it into a `SecretBackend::write` call without ever exposing it.
 pub fn generate(policy: &SecretGenPolicy) -> Result<Zeroizing<String>, GenerationError> {
     match policy {
-        SecretGenPolicy::PasswordRandom { length, charset, .. } => {
-            random_string(usize::from(*length), charset.alphabet())
-        }
+        SecretGenPolicy::PasswordRandom {
+            length, charset, ..
+        } => random_string(usize::from(*length), charset.alphabet()),
         SecretGenPolicy::Token { length, prefix } => {
             let body = random_string(usize::from(*length), Charset::Alphanumeric.alphabet())?;
             let mut out = Zeroizing::new(String::with_capacity(
@@ -52,12 +52,8 @@ pub fn generate(policy: &SecretGenPolicy) -> Result<Zeroizing<String>, Generatio
         SecretGenPolicy::WireguardKeypair => {
             Err(GenerationError::NotYetImplemented("WireguardKeypair"))
         }
-        SecretGenPolicy::SshKeypair { .. } => {
-            Err(GenerationError::NotYetImplemented("SshKeypair"))
-        }
-        SecretGenPolicy::TlsKeypair { .. } => {
-            Err(GenerationError::NotYetImplemented("TlsKeypair"))
-        }
+        SecretGenPolicy::SshKeypair { .. } => Err(GenerationError::NotYetImplemented("SshKeypair")),
+        SecretGenPolicy::TlsKeypair { .. } => Err(GenerationError::NotYetImplemented("TlsKeypair")),
     }
 }
 
@@ -101,8 +97,7 @@ impl ZeroizeExplicit for [u8; 1] {
 /// `PreSharedKey` material. We don't pull a `base64` crate just for
 /// this 30-line helper.
 fn base64_url_encode(bytes: &[u8]) -> String {
-    const ALPHA: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
