@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "d83a8d017345b2b80d7959efac92d5e959f954bf6b78b010cb46edf49d362e1d",
+  "cargo_lock_sha256": "06b06b280a4c6c2cc31fd5c1fbe4d6aec09818cb57afa37e78d95a9e1dafb3f1",
   "manifest_sha256": {
-    "Cargo.toml": "c9fdb34043f14ff3cce2faae4054fe94ca061f46d69297499e71146d8d948675",
+    "Cargo.toml": "961fbd09812e1ef4059235f47b342a8faace966475cd75fb522deef9f4817ea0",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
@@ -475,7 +475,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "cofre-0.1.3": {
+      "cofre-0.1.4": {
         "runtime_dependencies": [
           {
             "name": "akeyless_api",
@@ -512,7 +512,7 @@
           },
           {
             "name": "cofre_types",
-            "package_key": "cofre-types-0.1.3",
+            "package_key": "cofre-types-0.1.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -617,17 +617,17 @@
           "default"
         ]
       },
-      "cofre-fs-0.1.3": {
+      "cofre-fs-0.1.4": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-secret-0.1.3": {
+      "cofre-secret-0.1.4": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-types-0.1.3": {
+      "cofre-types-0.1.4": {
         "runtime_dependencies": [
           {
             "name": "gen_platform",
@@ -7119,7 +7119,7 @@
     "clap_lex-1.1.0": {
       "edition": "2024"
     },
-    "cofre-0.1.3": {
+    "cofre-0.1.4": {
       "edition": "2024",
       "binaries": [
         {
@@ -7128,21 +7128,21 @@
         }
       ]
     },
-    "cofre-fs-0.1.3": {
+    "cofre-fs-0.1.4": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_fs",
         "path": "src/lib.rs"
       }
     },
-    "cofre-secret-0.1.3": {
+    "cofre-secret-0.1.4": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_secret",
         "path": "src/lib.rs"
       }
     },
-    "cofre-types-0.1.3": {
+    "cofre-types-0.1.4": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_types",
