@@ -196,7 +196,10 @@ impl SecretBackend for AkeylessBackend {
                 Err(e) => {
                     // "ItemNotFound" → false; anything else → bubble up.
                     let msg = format!("{e:?}");
-                    if msg.contains("not found") || msg.contains("ItemNotFound") || msg.contains("404") {
+                    if msg.contains("not found")
+                        || msg.contains("ItemNotFound")
+                        || msg.contains("404")
+                    {
                         Ok(false)
                     } else {
                         Err(BackendError::Io(msg))
@@ -270,7 +273,10 @@ pub struct SopsBackend {
 }
 
 impl SopsBackend {
-    pub fn new(file: impl Into<PathBuf>, self_argv0: impl Into<PathBuf>) -> Result<Self, BackendError> {
+    pub fn new(
+        file: impl Into<PathBuf>,
+        self_argv0: impl Into<PathBuf>,
+    ) -> Result<Self, BackendError> {
         let sops_bin = which_sops()?;
         Ok(Self {
             file_path: file.into(),
@@ -286,10 +292,7 @@ impl SopsBackend {
     /// Returns `true` when the batch wrote at least one new value,
     /// `false` when every entry in the batch was already present (an
     /// idempotent no-op — sops's own exit 200, "file has not changed").
-    pub async fn apply_batch(
-        &self,
-        plan_slice: &[SopsHookEntry],
-    ) -> Result<bool, BackendError> {
+    pub async fn apply_batch(&self, plan_slice: &[SopsHookEntry]) -> Result<bool, BackendError> {
         // Write the plan slice (no secrets, just policy) to a 0600
         // tempfile that the hook child reads.
         let mut tmp = tempfile::Builder::new()
@@ -303,10 +306,7 @@ impl SopsBackend {
             .map_err(|e| BackendError::Io(format!("plan write: {e}")))?;
 
         let plan_path = tmp.path().to_path_buf();
-        let editor_cmd = format!(
-            "{} __sops-editor-hook",
-            self.self_argv0.display()
-        );
+        let editor_cmd = format!("{} __sops-editor-hook", self.self_argv0.display());
 
         let status = tokio::process::Command::new(&self.sops_bin)
             .arg(&self.file_path)
@@ -331,9 +331,7 @@ impl SopsBackend {
             return Ok(false);
         }
         if !status.success() {
-            return Err(BackendError::Io(format!(
-                "sops exited with {status:?}"
-            )));
+            return Err(BackendError::Io(format!("sops exited with {status:?}")));
         }
         Ok(true)
     }
@@ -344,15 +342,16 @@ fn which_sops() -> Result<PathBuf, BackendError> {
         return Ok(PathBuf::from(p));
     }
     // Naive PATH search.
-    let path = std::env::var("PATH")
-        .map_err(|_| BackendError::Env("PATH not set".into()))?;
+    let path = std::env::var("PATH").map_err(|_| BackendError::Env("PATH not set".into()))?;
     for entry in path.split(':') {
         let candidate = std::path::Path::new(entry).join("sops");
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    Err(BackendError::Env("`sops` binary not found in PATH (set $SOPS to override)".into()))
+    Err(BackendError::Env(
+        "`sops` binary not found in PATH (set $SOPS to override)".into(),
+    ))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -376,8 +375,9 @@ pub struct SopsHookEntry {
 ///   4. Write the YAML back to the same path.
 ///   5. Exit 0 — sops re-encrypts.
 pub fn run_editor_hook(plaintext_path: &std::path::Path) -> std::io::Result<()> {
-    let plan_path = std::env::var("COFRE_SOPS_PLAN_PATH")
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "COFRE_SOPS_PLAN_PATH unset"))?;
+    let plan_path = std::env::var("COFRE_SOPS_PLAN_PATH").map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::Other, "COFRE_SOPS_PLAN_PATH unset")
+    })?;
     let plan_slice: Vec<SopsHookEntry> = serde_json::from_slice(&std::fs::read(&plan_path)?)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
@@ -395,7 +395,11 @@ pub fn run_editor_hook(plaintext_path: &std::path::Path) -> std::io::Result<()> 
         }
         let value = generation::generate(&entry.policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        yaml_set(&mut doc, &entry.yaml_path, serde_yaml::Value::String((*value).clone()));
+        yaml_set(
+            &mut doc,
+            &entry.yaml_path,
+            serde_yaml::Value::String((*value).clone()),
+        );
         wrote_any = true;
     }
 
@@ -424,14 +428,21 @@ fn yaml_set(doc: &mut serde_yaml::Value, dotted: &str, value: serde_yaml::Value)
     let mut cur = doc;
     for part in &parts[..parts.len() - 1] {
         let key = serde_yaml::Value::String((*part).into());
-        let map = cur.as_mapping_mut().expect("yaml_set traversal expected mapping");
+        let map = cur
+            .as_mapping_mut()
+            .expect("yaml_set traversal expected mapping");
         if !map.contains_key(&key) {
-            map.insert(key.clone(), serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            map.insert(
+                key.clone(),
+                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            );
         }
         cur = map.get_mut(&key).expect("just-inserted key present");
     }
     let last_key = serde_yaml::Value::String((*parts.last().unwrap()).into());
-    let map = cur.as_mapping_mut().expect("final yaml_set traversal expected mapping");
+    let map = cur
+        .as_mapping_mut()
+        .expect("final yaml_set traversal expected mapping");
     map.insert(last_key, value);
 }
 
@@ -468,7 +479,9 @@ mod tests {
         let b = MockBackend::new();
         let s = mock_secret("foo");
         assert!(!b.exists(&s).await.unwrap());
-        b.write(&s, Zeroizing::new("supersecret".into())).await.unwrap();
+        b.write(&s, Zeroizing::new("supersecret".into()))
+            .await
+            .unwrap();
         assert!(b.exists(&s).await.unwrap());
         assert_eq!(b.value_length("mock:foo"), Some(11));
     }
@@ -483,8 +496,7 @@ mod tests {
 
     #[test]
     fn yaml_set_overwrites_existing() {
-        let mut doc: serde_yaml::Value =
-            serde_yaml::from_str("a:\n  b: old").unwrap();
+        let mut doc: serde_yaml::Value = serde_yaml::from_str("a:\n  b: old").unwrap();
         yaml_set(&mut doc, "a.b", serde_yaml::Value::String("new".into()));
         assert_eq!(yaml_get(&doc, "a.b").unwrap().as_str(), Some("new"));
     }

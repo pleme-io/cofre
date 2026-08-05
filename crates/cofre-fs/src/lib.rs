@@ -149,7 +149,12 @@ mod tests {
             b"",
             "the secret must not have been written through the symlink"
         );
-        assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(
+            !std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 
