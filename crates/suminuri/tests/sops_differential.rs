@@ -444,6 +444,99 @@ fn the_same_leaves_are_encrypted_under_a_suffix_rule() {
     }
 }
 
+/// The EDITOR-hijack contract, both binaries — because `cofre`'s own `SopsBackend`
+/// depends on it and the overlay put suminuri underneath it.
+///
+/// The shape: set `EDITOR` to a program that rewrites the decrypted tempfile, run
+/// `sops <file>`, and the tool re-encrypts whatever the "editor" left. Three repos
+/// independently ported this trick because `sops set` takes its value as argv with
+/// no stdin form. What they all branch on is the **exit code**:
+///
+/// | editor did | exit |
+/// |---|---|
+/// | rewrote the file | 0 |
+/// | nothing | **200** — sops's documented "file has not changed" |
+///
+/// `cofre/crates/cofre/src/backends.rs` treats 200 as an idempotent no-op. Get it
+/// wrong and every unchanged `cofre apply` reports a failure.
+#[test]
+fn the_editor_hijack_contract_agrees_including_exit_200() {
+    let Some(o) = oracle_or_skip() else { return };
+
+    // Two "editors": one that injects a key, one that does nothing.
+    let injector = o.dir.join("inject.sh");
+    std::fs::write(
+        &injector,
+        "#!/bin/sh\nprintf 'existing: value\\ninjected: by-hook\\n' > \"$1\"\n",
+    )
+    .expect("write injector");
+    let noop = o.dir.join("noop.sh");
+    std::fs::write(&noop, "#!/bin/sh\nexit 0\n").expect("write noop");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for p in [&injector, &noop] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    }
+
+    let plain = "existing: value\n";
+    o.write("hijack-plain.yaml", plain.as_bytes());
+
+    // One encrypted file per binary, so neither run disturbs the other's.
+    let mut verdicts = Vec::new();
+    for (label, is_ours) in [("sops", false), ("ours", true)] {
+        let src = format!("hijack-{label}.yaml");
+        let (_, enc, err) = o.sops(&["-e", "hijack-plain.yaml"]);
+        assert!(!enc.is_empty(), "{label}: encrypt produced nothing: {err}");
+        o.write(&src, &enc);
+
+        let run = |editor: &std::path::Path, args: &[&str]| -> i32 {
+            let bin = if is_ours { &o.suminuri } else { &o.sops };
+            std::process::Command::new(bin)
+                .args(args)
+                .current_dir(&o.dir)
+                .env("SOPS_DISABLE_VERSION_CHECK", "1")
+                .env("SOPS_AGE_KEY_FILE", &o.key_file)
+                .env("EDITOR", editor)
+                .status()
+                .unwrap_or_else(|e| panic!("{label}: spawn failed: {e}"))
+                .code()
+                .unwrap_or(-1)
+        };
+
+        let unchanged = run(&noop, &[&src]);
+        let changed = run(&injector, &[&src]);
+        verdicts.push((label, unchanged, changed));
+
+        // And the edited file must still decrypt — through the OTHER binary, so
+        // this is a parity claim and not a self-check.
+        let (code, out, derr) = if is_ours {
+            o.sops(&["-d", &src])
+        } else {
+            o.ours(&["-d", &src])
+        };
+        assert_eq!(
+            code, 0,
+            "{label}: the other binary could not read the edited file: {derr}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "existing: value\ninjected: by-hook\n",
+            "{label}: the editor's write did not survive the round trip"
+        );
+    }
+
+    for (label, unchanged, changed) in &verdicts {
+        assert_eq!(
+            *unchanged, 200,
+            "{label}: an unchanged edit must be exit 200"
+        );
+        assert_eq!(*changed, 0, "{label}: a changed edit must be exit 0");
+    }
+    println!("2 binaries x 2 editor outcomes: exit codes and round-trips agree");
+}
+
 /// sops does **not** round-trip every YAML text unchanged, and this is the case
 /// that proves it. Recorded as its own test because it is a real behaviour an
 /// operator will eventually hit, and because it is the reason the two round-trip
