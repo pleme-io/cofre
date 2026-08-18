@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT OR Apache-2.0"
@@ -29,7 +29,7 @@ module_name_repetitions = "allow"
 
 [workspace.dependencies]
 # Workspace crates
-cofre-types = { path = "crates/cofre-types", version = "0.1.4" }
+cofre-types = { path = "crates/cofre-types", version = "0.1.5" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
