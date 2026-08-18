@@ -593,10 +593,15 @@ fn extract(tree: &Value, path_expr: &str) -> Result<String, AppError> {
             },
         };
     }
-    // A scalar extracts as its bare text with a trailing newline — that is what a
-    // shell substitution wants, and what sops does. A collection extracts as YAML.
+    // A scalar extracts as its bare text with **no trailing newline**. Measured
+    // against sops v3.12.1 rather than assumed: `sops -d --extract '["k"]'` of a
+    // scalar emits exactly the value's bytes. The first version appended a
+    // newline on the reasoning that "a shell substitution wants one" — which is
+    // true and irrelevant, because `$(…)` strips trailing newlines either way,
+    // while `> file` and any byte comparison do not. A collection extracts as
+    // YAML, which does end in a newline because the emitter terminates lines.
     Ok(match current {
-        Value::Scalar(s) => format!("{}\n", s.value),
+        Value::Scalar(s) => s.value.clone(),
         other => suminuri_yaml::emit(
             &suminuri_yaml::Document::single(other.clone()),
             suminuri_yaml::EmitOptions::default(),
@@ -761,10 +766,12 @@ mod tests {
         let env2 = w.env(&[("/repo/enc.yaml", &encrypted)]);
         let (_, v) = run_capture(&["-d", "--extract", "[\"alpha\"]", "/repo/enc.yaml"], &env2)
             .expect("extract");
-        assert_eq!(
-            v, "one\n",
-            "bare text with a newline, for a shell substitution"
-        );
+        // No trailing newline. Measured against sops v3.12.1, which emits exactly
+        // the value's bytes; `$(…)` strips a trailing newline either way, so the
+        // "a shell substitution wants one" reasoning that produced the first
+        // version of this was true and irrelevant — while `> file` and any byte
+        // comparison do care.
+        assert_eq!(v, "one");
     }
 
     #[test]

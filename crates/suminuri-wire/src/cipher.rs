@@ -123,24 +123,44 @@ impl std::fmt::Debug for Iv {
     }
 }
 
-/// Remembers the IV used for each `(plaintext, aad)` pair so re-encrypting an
-/// unchanged value reproduces its exact previous ciphertext.
+/// Remembers the IV used for each `(type, plaintext, aad)` triple so re-encrypting
+/// an unchanged value reproduces its exact previous ciphertext.
 ///
 /// This is not an optimisation. `sops edit` decrypts, hands the tree to an
 /// editor, and re-encrypts everything; without the stash **every line of the
 /// file changes on every edit**, which destroys the property the whole format
-/// exists for — a readable, reviewable diff. Upstream calls it `stash` and keys
-/// it on exactly the same pair.
+/// exists for — a readable, reviewable diff.
 ///
-/// The security shape is worth stating rather than inheriting silently: two
-/// identical values at the same path reuse a nonce under one data key. Since the
-/// plaintexts are identical, GCM's nonce-reuse failure reveals nothing an
-/// attacker did not already have (equal ciphertext for equal plaintext, which
-/// deterministic encryption concedes by construction). It is a knowing trade,
-/// not an oversight, and it is confined to *unchanged* values.
+/// # The type is part of the key, and leaving it out is a real bug
+///
+/// Upstream's key is `stashKey{plaintext interface{}, additionalData string}`, and
+/// a Go map compares an `interface{}` by **dynamic type and value** — so `int(1)`
+/// and `string("1")` are two different keys there. The first version of this
+/// struct keyed on the raw plaintext *bytes*, which collapses exactly the pairs
+/// the encodings make indistinguishable:
+///
+/// | these are distinct upstream | but share one byte string |
+/// |---|---|
+/// | `1` (int) / `1.0` (float) / `"1"` (str) | `1` |
+/// | `true` (bool) / `"True"` (str) | `True` |
+/// | `false` (bool) / `"False"` (str) | `False` |
+///
+/// Two such leaves under the *same* AAD — which is to say two elements of one
+/// list, since a sequence adds no path component — would then be handed the same
+/// nonce. The plaintext bytes are equal, so this is not the catastrophic form of
+/// GCM nonce reuse; the consequence is a file whose bytes differ from the one
+/// sops would have written, which for a tool whose entire claim is byte-parity is
+/// the bug that matters. [`LeafType`] is in the key.
+///
+/// # The reuse that remains, stated rather than inherited
+///
+/// Two *genuinely identical* typed values at one path do still share a nonce. The
+/// plaintexts are identical, so an attacker learns only that they are equal —
+/// which any deterministic encryption concedes by construction. It is a knowing
+/// trade, confined to unchanged values, and it is the price of a reviewable diff.
 #[derive(Default)]
 pub struct IvStash {
-    seen: HashMap<(Vec<u8>, Vec<u8>), Iv>,
+    seen: HashMap<(LeafType, Vec<u8>, Vec<u8>), Iv>,
 }
 
 impl IvStash {
@@ -149,20 +169,25 @@ impl IvStash {
         Self::default()
     }
 
+    fn key(plaintext: &Plaintext, aad: &Aad) -> (LeafType, Vec<u8>, Vec<u8>) {
+        (
+            plaintext.leaf_type(),
+            plaintext.expose().to_vec(),
+            aad.as_bytes().to_vec(),
+        )
+    }
+
     /// Record the IV a leaf was decrypted with, so an unchanged value keeps it.
     pub fn remember(&mut self, plaintext: &Plaintext, aad: &Aad, iv: &[u8]) {
         if let Some(iv) = Iv::from_wire_exact(iv) {
-            self.seen
-                .insert((plaintext.expose().to_vec(), aad.as_bytes().to_vec()), iv);
+            self.seen.insert(Self::key(plaintext, aad), iv);
         }
     }
 
     /// The remembered IV for this pair, if any.
     #[must_use]
     pub fn recall(&self, plaintext: &Plaintext, aad: &Aad) -> Option<Iv> {
-        self.seen
-            .get(&(plaintext.expose().to_vec(), aad.as_bytes().to_vec()))
-            .cloned()
+        self.seen.get(&Self::key(plaintext, aad)).cloned()
     }
 
     /// How many pairs are remembered. Diagnostics only.
@@ -418,6 +443,65 @@ mod tests {
             first.render(),
             second.render(),
             "an unchanged value must re-encrypt identically"
+        );
+    }
+
+    /// The typed-key regression. Upstream's stash key is a Go `interface{}`, so
+    /// `int(1)` and `string("1")` are different keys; keying on the raw bytes
+    /// collapses them and hands two list elements the same nonce.
+    #[test]
+    fn the_stash_key_separates_values_that_share_a_byte_string() {
+        let a = aad(&["items"]);
+        let mut stash = IvStash::new();
+        let iv = [42u8; 32];
+
+        // `1` as an int, remembered.
+        stash.remember(&Plaintext::integer(1), &a, &iv);
+        assert_eq!(stash.len(), 1);
+
+        // The *string* "1" has the same bytes and must NOT hit.
+        assert!(
+            stash.recall(&Plaintext::string("1"), &a).is_none(),
+            "a str must not recall an int's nonce"
+        );
+        // Nor must a float that renders to the same digits.
+        assert!(
+            stash.recall(&Plaintext::float(1.0), &a).is_none(),
+            "a float must not recall an int's nonce"
+        );
+        // The int itself still does.
+        assert!(stash.recall(&Plaintext::integer(1), &a).is_some());
+
+        // `true` renders as `True`, which is also a perfectly good string.
+        stash.remember(&Plaintext::boolean(true), &a, &iv);
+        assert!(
+            stash.recall(&Plaintext::string("True"), &a).is_none(),
+            "a str must not recall a bool's nonce"
+        );
+        assert!(stash.recall(&Plaintext::boolean(true), &a).is_some());
+
+        // Four distinct entries from three byte strings.
+        stash.remember(&Plaintext::string("1"), &a, &iv);
+        stash.remember(&Plaintext::float(1.0), &a, &iv);
+        stash.remember(&Plaintext::string("True"), &a, &iv);
+        assert_eq!(stash.len(), 5, "int, bool, str-1, float-1, str-True");
+    }
+
+    /// And the AAD is still part of the key, so the same value at a different path
+    /// gets its own nonce.
+    #[test]
+    fn the_stash_key_separates_paths() {
+        let mut stash = IvStash::new();
+        stash.remember(&Plaintext::string("v"), &aad(&["a"]), &[1u8; 32]);
+        assert!(
+            stash
+                .recall(&Plaintext::string("v"), &aad(&["b"]))
+                .is_none()
+        );
+        assert!(
+            stash
+                .recall(&Plaintext::string("v"), &aad(&["a"]))
+                .is_some()
         );
     }
 
