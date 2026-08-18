@@ -125,7 +125,7 @@ impl Plaintext {
     #[must_use]
     pub fn float(v: f64) -> Self {
         Self {
-            bytes: Zeroizing::new(format_go_float(v).into_bytes()),
+            bytes: Zeroizing::new(format_go_float_f(v).into_bytes()),
             ty: LeafType::Float,
         }
     }
@@ -252,7 +252,7 @@ impl Eq for Plaintext {}
 /// switches to `1e300`-style output past a threshold, so the exponent case is
 /// expanded positionally from the shortest form rather than re-derived — which
 /// keeps the digits identical to Go's.
-fn format_go_float(v: f64) -> String {
+pub fn format_go_float_f(v: f64) -> String {
     let shortest = format!("{v}");
     if !shortest.contains(['e', 'E']) {
         return shortest;

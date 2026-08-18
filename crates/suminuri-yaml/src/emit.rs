@@ -188,11 +188,20 @@ fn emit_sequence(
     Ok(())
 }
 
-/// A mapping key. Keys take the same quoting decision as fresh values — a key
-/// that would reparse as a number or a timestamp has to be quoted.
+/// A mapping key.
+///
+/// `for_new_key`, not `for_new_value`: libyaml's `simple_key_context` forces
+/// double-quoting for a multiline scalar, because a key cannot be a block scalar.
+/// A key also cannot be single-quoted-by-fallback in the same way a value can, so
+/// anything not plain-safe is double-quoted here.
 fn emit_key(key: &str, out: &mut String) {
-    match ScalarStyle::for_new_value(key) {
+    match ScalarStyle::for_new_key(key) {
         ScalarStyle::Plain => out.push_str(key),
+        ScalarStyle::SingleQuoted => {
+            out.push('\'');
+            out.push_str(&key.replace('\'', "''"));
+            out.push('\'');
+        }
         _ => push_double_quoted(out, key),
     }
 }
@@ -222,9 +231,20 @@ fn emit_scalar(s: &Scalar, ind: &mut Indenter, out: &mut String, ctx: Context) {
             // `a: "1"`, which would change both its YAML type and its MAC
             // contribution. Using the wrong predicate here is what the
             // round-trip tests caught.
+            //
+            // The promotion target follows libyaml's ladder rather than jumping to
+            // double quotes: a plain-unsafe scalar becomes *single*-quoted when
+            // single quotes can hold it, which is what go-yaml emits.
             open_inline(out, ctx);
             if crate::tree::plain_is_structurally_unsafe(&s.value) {
-                push_double_quoted(out, &s.value);
+                match ScalarStyle::for_new_value(&s.value) {
+                    ScalarStyle::SingleQuoted => {
+                        out.push('\'');
+                        out.push_str(&s.value.replace('\'', "''"));
+                        out.push('\'');
+                    }
+                    _ => push_double_quoted(out, &s.value),
+                }
             } else {
                 out.push_str(&s.value);
             }
@@ -461,12 +481,14 @@ sops:
     #[test]
     fn a_plain_value_that_stopped_being_safe_gets_promoted_not_corrupted() {
         // A value parsed plain, then replaced with one that cannot be plain.
+        // Promoted to *single* quotes, which is what real sops emits for this
+        // exact value — libyaml's `PLAIN -> SINGLE` rung, not a jump to double.
         let doc = Document::single(Value::Mapping(vec![Item::Pair {
             key: "k".into(),
             value: Value::Scalar(Scalar::parsed("has # hash", ScalarStyle::Plain)),
         }]));
         let out = emit(&doc, EmitOptions::default()).expect("emit");
-        assert_eq!(out, "k: \"has # hash\"\n");
+        assert_eq!(out, "k: 'has # hash'\n");
         // and it survives a reparse, which the un-promoted form would not
         assert_eq!(
             parse(&out)

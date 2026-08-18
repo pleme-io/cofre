@@ -194,10 +194,33 @@ pub fn verify_mac_field(
     lastmodified_verbatim: &str,
     computed: &Mac,
 ) -> Result<Mac, WireError> {
+    verify_mac_field_recording(key, mac_field, lastmodified_verbatim, computed, None)
+}
+
+/// [`verify_mac_field`], recording the MAC field's own IV into a stash.
+///
+/// Upstream gets this for free: the `mac` field goes through the **same `Cipher`
+/// instance** as every leaf, so decrypting it populates that Cipher's stash and a
+/// later re-encrypt of an unchanged MAC reproduces the identical line. Splitting
+/// the MAC out into free functions here lost that for nothing, and the symptom was
+/// subtle — a no-op re-encrypt whose every *data* line was byte-identical and
+/// whose `mac:` line alone had moved.
+///
+/// It only bites when the timestamp is unchanged too, since `lastmodified` is the
+/// AAD: a normal `edit` stamps a new one and the line legitimately changes. The
+/// cases where it matters are a same-second re-encrypt and a fixed-clock test —
+/// and a property that holds only when nobody looks closely is not a property.
+pub fn verify_mac_field_recording(
+    key: &DataKey,
+    mac_field: &str,
+    lastmodified_verbatim: &str,
+    computed: &Mac,
+    stash: Option<&mut crate::cipher::IvStash>,
+) -> Result<Mac, WireError> {
     let leaf = EncryptedLeaf::parse(mac_field).map_err(|_| WireError::MacUndecryptable)?;
     let aad = mac_field_aad(lastmodified_verbatim);
     let stored =
-        decrypt_leaf_as_string(key, &leaf, &aad).map_err(|_| WireError::MacUndecryptable)?;
+        decrypt_leaf_as_string(key, &leaf, &aad, stash).map_err(|_| WireError::MacUndecryptable)?;
     let stored = Mac::from_file(stored.as_str());
     if stored == *computed {
         Ok(stored)

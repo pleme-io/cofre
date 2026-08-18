@@ -29,8 +29,8 @@
 //! the *default* or the *silent* one.
 
 use crate::WireError;
-use crate::cipher::DataKey;
-use crate::mac::{Mac, verify_mac_field};
+use crate::cipher::{DataKey, IvStash};
+use crate::mac::{Mac, verify_mac_field_recording};
 
 /// A decrypted value whose file MAC has not been checked yet.
 ///
@@ -87,16 +87,43 @@ impl<T> Unverified<T> {
     /// gate. A caller that genuinely wants to accept an empty document can say so
     /// with [`Unverified::verify_allowing_empty`].
     pub fn verify(self, key: &DataKey) -> Result<T, WireError> {
+        self.verify_recording(key, None)
+    }
+
+    /// [`Unverified::verify`], recording the MAC field's own IV into `stash`.
+    ///
+    /// Pass the same stash the decrypt walk filled. Upstream gets this for free
+    /// because the `mac` field shares one `Cipher` with every leaf; without it a
+    /// no-op re-encrypt leaves every data line untouched and moves the `mac:`
+    /// line alone.
+    pub fn verify_recording(
+        self,
+        key: &DataKey,
+        stash: Option<&mut IvStash>,
+    ) -> Result<T, WireError> {
         if self.leaves_fed == 0 {
             return Err(WireError::MacMismatch);
         }
-        self.verify_allowing_empty(key)
+        verify_mac_field_recording(
+            key,
+            &self.mac_field,
+            &self.lastmodified,
+            &self.computed,
+            stash,
+        )?;
+        Ok(self.inner)
     }
 
     /// [`Unverified::verify`] without the anti-vacuity refusal, for the genuinely
     /// empty document.
     pub fn verify_allowing_empty(self, key: &DataKey) -> Result<T, WireError> {
-        verify_mac_field(key, &self.mac_field, &self.lastmodified, &self.computed)?;
+        verify_mac_field_recording(
+            key,
+            &self.mac_field,
+            &self.lastmodified,
+            &self.computed,
+            None,
+        )?;
         Ok(self.inner)
     }
 

@@ -61,6 +61,23 @@ pub struct EncryptionSelector {
 /// sops's default when no selector at all is configured.
 pub const DEFAULT_UNENCRYPTED_SUFFIX: &str = "_unencrypted";
 
+/// An unanchored regex match, or `false` on a pattern that does not compile.
+///
+/// Exported so `.sops.yaml`'s `path_regex` matching uses the **same engine** the
+/// selectors do. Both are reproducing Go RE2 semantics, and two regex crates in
+/// one tool would be two subtly different answers to the same question.
+///
+/// The swallowed compile error is upstream's behaviour: `regexp.MatchString`'s
+/// error is discarded at every sops call site, so a bad pattern matches nothing.
+/// Where the pattern is a file's own *policy* that silence is a real hazard, which
+/// is why [`EncryptionSelector::new`] compiles up front and refuses instead — this
+/// entry point is for the config's `path_regex`, where falling through to the next
+/// rule is at least visible.
+#[must_use]
+pub fn regex_is_match(pattern: &str, text: &str) -> bool {
+    Regex::new(pattern).is_ok_and(|re| re.is_match(text))
+}
+
 impl EncryptionSelector {
     /// Compile a policy. Every field is the metadata field of the same name;
     /// `None`/empty means "not configured", matching upstream's `""` test.

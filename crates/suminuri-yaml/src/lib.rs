@@ -81,7 +81,7 @@ mod tree;
 pub use emit::{EmitOptions, emit};
 pub use indent::Indenter;
 pub use parse::parse;
-pub use tree::{Document, Entry, Item, Scalar, ScalarStyle, Value};
+pub use tree::{Document, Entry, Item, Scalar, ScalarStyle, Value, literal_block_allowed};
 
 /// Everything that can go wrong in the YAML layer.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
