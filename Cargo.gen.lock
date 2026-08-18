@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "43335cda48d27c6a41004d318ebb4e6a0f02ea7c2347027058988fb11e576086",
+  "cargo_lock_sha256": "6cda97cee8f866bc3d09259cd4595846f302b3ebfe8fc1662e739cbfe2b1af76",
   "manifest_sha256": {
-    "Cargo.toml": "d79b7b9478c82e22976a3c11b62525b4e9d6c92fa99a5ab7c0fde7849d3c6552",
+    "Cargo.toml": "88e95317cc1cfec8460a0ba9bfc085002f24d213327b4c6ebd036595df64ab6d",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
@@ -676,7 +676,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "cofre-0.1.4": {
+      "cofre-0.1.5": {
         "runtime_dependencies": [
           {
             "name": "akeyless_api",
@@ -713,7 +713,7 @@
           },
           {
             "name": "cofre_types",
-            "package_key": "cofre-types-0.1.4",
+            "package_key": "cofre-types-0.1.5",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -818,17 +818,17 @@
           "default"
         ]
       },
-      "cofre-fs-0.1.4": {
+      "cofre-fs-0.1.5": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-secret-0.1.4": {
+      "cofre-secret-0.1.5": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-types-0.1.4": {
+      "cofre-types-0.1.5": {
         "runtime_dependencies": [
           {
             "name": "gen_platform",
@@ -4883,7 +4883,7 @@
           "std"
         ]
       },
-      "suminuri-wire-0.1.4": {
+      "suminuri-wire-0.1.5": {
         "runtime_dependencies": [
           {
             "name": "aes",
@@ -4993,7 +4993,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "suminuri-yaml-0.1.4": {
+      "suminuri-yaml-0.1.5": {
         "runtime_dependencies": [
           {
             "name": "libyaml_safer",
@@ -8085,7 +8085,7 @@
     "clap_lex-1.1.0": {
       "edition": "2024"
     },
-    "cofre-0.1.4": {
+    "cofre-0.1.5": {
       "edition": "2024",
       "binaries": [
         {
@@ -8094,21 +8094,21 @@
         }
       ]
     },
-    "cofre-fs-0.1.4": {
+    "cofre-fs-0.1.5": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_fs",
         "path": "src/lib.rs"
       }
     },
-    "cofre-secret-0.1.4": {
+    "cofre-secret-0.1.5": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_secret",
         "path": "src/lib.rs"
       }
     },
-    "cofre-types-0.1.4": {
+    "cofre-types-0.1.5": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_types",
@@ -8530,14 +8530,14 @@
     "subtle-2.6.1": {
       "edition": "2018"
     },
-    "suminuri-wire-0.1.4": {
+    "suminuri-wire-0.1.5": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri_wire",
         "path": "src/lib.rs"
       }
     },
-    "suminuri-yaml-0.1.4": {
+    "suminuri-yaml-0.1.5": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri_yaml",
