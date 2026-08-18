@@ -105,6 +105,21 @@ Both differential tests print their own denominator and say **"this is a SKIP, n
 a pass"** when no oracle is available; `SUMINURI_DIFFERENTIAL_REQUIRE=1` and
 `SUMINURI_PARITY_REQUIRE=1` turn a skip into a failure.
 
+### The gate's own red runs
+
+A differential that has never been *seen to fail* is a claim about a test, not about
+the code. Two **independent** subsystems were deliberately broken and the gate named
+each precisely; both were reverted and neither was committed.
+
+| break | went red | the report |
+|---|---|---|
+| `'g'` exponent threshold reverted to the digit count | `both_binaries_render_a_decrypt_identically`, `real_sops_ciphertext_is_readable_by_us` | `bigfloat: want client_id: 6.088634523481149e+11 / got 608863452348.1149` |
+| libyaml's `PLAIN → SINGLE` rung demoted straight to double quotes | the same two | `want hash: 'has # hash' / got hash: "has # hash"`, and the same for `colon:` and `lead_space:` |
+
+Two different subsystems matter: a gate sensitive to only one mechanism would pass a
+regression in the other, which is exactly how the six bugs below survived every
+synthetic fixture.
+
 ### Six bugs the evidence caught that no amount of reading would have
 
 Recorded because each one was invisible until a *different* implementation
