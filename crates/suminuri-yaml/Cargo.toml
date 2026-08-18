@@ -1,0 +1,20 @@
+[package]
+name = "suminuri-yaml"
+description = "墨塗り — an ordered YAML tree plus a go-yaml-v3-byte-compatible emitter, so a re-encrypted sops file diffs as a few lines instead of a whole rewrite."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+categories = ["encoding", "parsing"]
+keywords = ["yaml", "sops", "emitter", "byte-parity", "pleme-io"]
+
+[lints]
+workspace = true
+
+[dependencies]
+libyaml-safer = "0.3"
+thiserror = { workspace = true }
