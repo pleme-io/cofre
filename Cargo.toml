@@ -5,6 +5,8 @@ members = [
     "crates/cofre-fs",
     "crates/cofre-secret",
     "crates/cofre",
+    "crates/suminuri-wire",
+    "crates/suminuri-yaml",
 ]
 
 [workspace.package]

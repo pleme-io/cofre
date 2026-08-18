@@ -1,0 +1,28 @@
+[package]
+name = "suminuri-wire"
+description = "墨塗り — the sops-compatible encrypted-file wire format, as a typed border. Pure: no I/O, no key providers, no clock."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+categories = ["cryptography", "encoding"]
+keywords = ["sops", "age", "secrets", "aes-gcm", "pleme-io"]
+
+[lints]
+workspace = true
+
+[dependencies]
+aes = "0.8"
+aes-gcm = "0.10"
+base64 = "0.22"
+getrandom = { workspace = true }
+regex = "1"
+serde = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+thiserror = { workspace = true }
+zeroize = { workspace = true }

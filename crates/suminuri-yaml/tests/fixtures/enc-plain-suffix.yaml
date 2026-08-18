@@ -1,0 +1,20 @@
+secret: ENC[AES256_GCM,data:Y0HDBGd1cQ==,iv:TtIxvt0TuVKcMuEP3L1EyXsex+ggn2LIRtkmHvVH9TA=,tag:Do7EvoU7dCK8QaF/psmRfg==,type:str]
+port_unencrypted: 8080
+nested:
+    also_unencrypted: visible
+    hidden: ENC[AES256_GCM,data:qqqxQiOohg==,iv:K5SZV5xIAkN4nmURHJhgZSeZXd8EVAavxLrU4GoasJY=,tag:8KwikBzEcoMy6sazHK6Avw==,type:str]
+sops:
+    age:
+        - recipient: age1jpfgn0cm8su4dt3a2c0928cyvhquvx0ayyssnctk5nwjdnpv85vsqssjrh
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBjWkQzVmRiOHlUTFA5ZU9W
+            UysvUzEwTzFHQWxiZXBxOXYyYWVEekJnWWlvClc0Q0VrbGtEOThtd3dkZmtneUVT
+            alhiZkNWbEcrL3NoaXlINHUrV2RYc0EKLS0tIFY0TUVqb25OdmViQ3k5bGl3YVRB
+            R2Q4aDNyU0F1YjFaUmRlcjMxNGFFRnMKvF6qGJMOklXmcAM84ub4YaPJtnGhfBDY
+            YvLJGjwqWVr7TBydWvUpr3Qdfq5YgWM3Rf8/LqtnwNWyabRoo95wvQ==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-08-18T18:47:55Z"
+    mac: ENC[AES256_GCM,data:pPgWjAg9FuAgDPz9JdxaaODZb5cy6eqFuwIXS/zr8yv2lNLW5m1WMNCzbtm/4sABDkfM+1/jkDjqwv8BWbrQKgF02c2eEos7W61Kp+hqUPTdfQUPU7VZ9wqifxmd9DJy83cNAD4PGPgCiRXBJzRvYb6ZZdZ1YOci3GI8qZsv3WE=,iv:e08hjOi+k/raKxW6beqUs5bjcZuNwLjhPjYRr9bUliA=,tag:+t5uDdlPdRPt0Kg0nwjj9A==,type:str]
+    unencrypted_suffix: _unencrypted
+    version: 3.12.1
