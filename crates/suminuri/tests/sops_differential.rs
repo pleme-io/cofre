@@ -111,7 +111,16 @@ impl Oracle {
         let suminuri = our_binary()?;
         let age_keygen = find_on_path("age-keygen")?;
 
-        let dir = std::env::temp_dir().join(format!("suminuri-diff-{}", std::process::id()));
+        // Unique per Oracle, NOT per process. Every test in this file builds its
+        // own Oracle and `Drop` removes the directory — so keying on
+        // `process::id()` alone gave all eight tests ONE shared directory that
+        // the first one to finish deleted out from under the others. It passed
+        // under `--test-threads=1` and failed 7 of 8 in parallel, which is the
+        // worst failure mode available: green in the run you reach for when
+        // something looks wrong.
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("suminuri-diff-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).ok()?;
         let key_file = dir.join("key.txt");
         let out = Command::new(age_keygen)
