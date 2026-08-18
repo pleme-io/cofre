@@ -97,9 +97,13 @@ that ask the *other* implementation.
 |---|---|---|
 | `byte_parity` | 7 fixtures **written by sops v3.12.1**, re-emitted by us | byte-identical; includes an anti-vacuity denominator and a test that `--indent` is load-bearing |
 | `live_parity` | operator-named real files, re-emitted | 3 files, 601 lines, 324 leaves — byte-identical, one of them written by sops **3.13.3** |
-| `sops_differential` | both binaries over 8 cases, both directions | 24 comparisons + rotate ×2, extract, selector, refusal — green |
+| `sops_differential` | both binaries over a 8-file corpus, both directions | 9 tests: 24 byte-comparisons + rotate ×2, extract, selector, the EDITOR-hijack exit codes, the YAML-1.1-bool non-round-trip, and a refusal — green |
 | `sops -d` on real fleet files | rendering parity | `secrets.yaml` 1381 lines and `users/drzzln/secrets.yaml` 93 lines — **byte-identical** |
-| unit suites | 208 tests | green |
+| whole workspace | 288 tests (wire 64 · yaml 50 · suminuri 110 · cofre's own 64) | green, repeated full-parallel runs |
+
+Counts measured 2026-08-18. They are stated because a suite that quietly loses
+cases still reports "ok" — the same anti-vacuity reason every gate here carries its
+own denominator.
 
 Both differential tests print their own denominator and say **"this is a SKIP, not
 a pass"** when no oracle is available; `SUMINURI_DIFFERENTIAL_REQUIRE=1` and
