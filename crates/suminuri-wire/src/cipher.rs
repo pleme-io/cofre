@@ -289,8 +289,9 @@ pub(crate) fn decrypt_leaf_as_string(
     key: &DataKey,
     leaf: &EncryptedLeaf,
     aad: &Aad,
+    stash: Option<&mut IvStash>,
 ) -> Result<Zeroizing<String>, WireError> {
-    let pt = decrypt_leaf(key, leaf, aad, None)?;
+    let pt = decrypt_leaf(key, leaf, aad, stash)?;
     if pt.leaf_type() != LeafType::Str {
         return Err(WireError::DatatypeMismatch { ty: "str" });
     }

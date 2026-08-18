@@ -1,0 +1,28 @@
+[package]
+name = "suminuri"
+description = "墨塗り — a pleme-io-native, sops-wire-compatible encrypted-file tool. Aliasable as `sops`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+categories = ["cryptography", "command-line-utilities"]
+keywords = ["sops", "age", "secrets", "encryption", "pleme-io"]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "suminuri"
+path = "src/main.rs"
+
+[dependencies]
+suminuri-wire = { workspace = true }
+suminuri-yaml = { workspace = true }
+age = { version = "0.11", features = ["armor"] }
+clap = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }

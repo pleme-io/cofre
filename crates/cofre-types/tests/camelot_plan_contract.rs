@@ -42,13 +42,14 @@ const CAMELOT_GOLDEN: &str = include_str!("testdata/camelot-cofre-plan.golden.js
 /// A required-field rename, a wire-tag rename, or a field type change breaks here.
 #[test]
 fn camelot_wire_shape_deserializes_through_real_type() {
-    let plan: SecretMaterializationPlan = serde_json::from_str(CAMELOT_GOLDEN).unwrap_or_else(|e| {
-        panic!(
-            "the frozen Camelot cofre plan no longer deserializes through the real \
+    let plan: SecretMaterializationPlan =
+        serde_json::from_str(CAMELOT_GOLDEN).unwrap_or_else(|e| {
+            panic!(
+                "the frozen Camelot cofre plan no longer deserializes through the real \
              SecretMaterializationPlan — a rename/type-change in cofre-types would break \
              `cofre apply --manifest` at runtime: {e}"
-        )
-    });
+            )
+        });
     plan.validate().unwrap_or_else(|e| {
         panic!("the frozen Camelot cofre plan fails cofre-types validation: {e}")
     });
@@ -85,7 +86,9 @@ fn camelot_typed_policies_survive_the_border() {
         other => panic!("mysql-root-password must be an Akeyless backend, got {other:?}"),
     }
     match &mysql.generation {
-        Some(SecretGenPolicy::PasswordRandom { length, charset, .. }) => {
+        Some(SecretGenPolicy::PasswordRandom {
+            length, charset, ..
+        }) => {
             assert_eq!(*length, 24);
             assert_eq!(*charset, cofre_types::Charset::Alphanumeric);
         }

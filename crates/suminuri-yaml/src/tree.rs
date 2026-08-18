@@ -32,45 +32,256 @@ pub enum ScalarStyle {
 }
 
 impl ScalarStyle {
-    /// The style go-yaml would pick for a value we are creating fresh.
+    /// The style go-yaml picks for a **string** it is emitting fresh.
     ///
-    /// Only the cases the sops metadata block actually produces are decided here;
-    /// everything else stays [`ScalarStyle::Plain`] and is covered by the
-    /// round-trip of an existing style. The honest limit: this is **not** a port
-    /// of go-yaml's resolver, so a *newly minted* value whose text happens to
-    /// resolve as a YAML 1.1 scalar type we do not enumerate would be emitted
-    /// plain where go-yaml would quote it.
+    /// A direct port of `encode.go`'s `stringv`, whose three cases are, in order:
+    ///
+    /// ```text
+    /// case strings.Contains(s, "\n"):  LITERAL   (block context; sops is never in flow)
+    /// case canUsePlain:                PLAIN
+    /// default:                         DOUBLE_QUOTED
+    /// ```
+    ///
+    /// with `canUsePlain = resolve("", s) == strTag && !isBase60Float(s) && !isOldBool(s)`.
+    ///
+    /// The newline case is the one that matters most and it was missing from the
+    /// first version of this function, which reached `DoubleQuoted` instead. The
+    /// consequence was invisible on every synthetic fixture and showed up only
+    /// against the operator's real files: an SSH private key came back as one
+    /// 420-character `"…\n…"` line where sops writes a `|` block. Both are valid
+    /// YAML holding the same string, and they are not the same bytes — so anything
+    /// consuming `sops -d` output by line, or diffing it, saw a difference.
+    ///
+    /// A literal block is not always *allowed*, though. libyaml refuses one when
+    /// the text has a trailing space, a space directly before a newline, or a
+    /// non-printable character, and go-yaml's emitter then falls back — so
+    /// [`literal_block_allowed`] gates the newline case rather than assuming it.
     #[must_use]
     pub fn for_new_value(value: &str) -> Self {
-        if needs_double_quoting(value) {
+        Self::select(value, false)
+    }
+
+    /// The style for a **mapping key**.
+    ///
+    /// One extra rule applies: libyaml forces double-quoting in
+    /// `simple_key_context` when the scalar is multiline, because a key cannot be
+    /// a block scalar.
+    #[must_use]
+    pub fn for_new_key(value: &str) -> Self {
+        Self::select(value, true)
+    }
+
+    /// libyaml's `yaml_emitter_select_scalar_style`, block context, unicode on.
+    ///
+    /// The ladder is the whole point, and each rung was learned from a real
+    /// divergence rather than from the docs:
+    ///
+    /// ```text
+    /// requested = LITERAL  if the text has a newline          (go-yaml stringv case 1)
+    ///           = PLAIN    if it resolves as !!str            (case 2)
+    ///           = DOUBLE   otherwise                          (case 3)
+    ///
+    /// PLAIN   + !block_plain_allowed    -> SINGLE      <- this rung was missing
+    /// SINGLE  + !single_quoted_allowed  -> DOUBLE
+    /// LITERAL + !block_allowed          -> DOUBLE
+    /// ```
+    ///
+    /// The `PLAIN -> SINGLE` rung is the one that mattered. A 3 179-character
+    /// bootstrap script in the operator's `secrets.yaml` resolves as `!!str`, so
+    /// go-yaml asks for plain; libyaml refuses (it contains `: `) and settles on
+    /// **single**-quoted. Jumping straight to double-quoted, as the first version
+    /// of this did, produced a valid file whose bytes differed on eight lines and
+    /// grew by ~324 characters of escaping.
+    fn select(value: &str, simple_key_context: bool) -> Self {
+        let a = ScalarAnalysis::of(value);
+        // `resolves_as_non_string`, NOT a structural test. go-yaml's `canUsePlain`
+        // asks only "would this text come back as something other than a string",
+        // and leaves *structural* plain-safety entirely to libyaml's analysis
+        // below. Conflating the two skips the `PLAIN -> SINGLE` rung and turns
+        // every `: `-bearing string into a double-quoted one — which is exactly
+        // the bootstrap-script divergence recorded above.
+        let mut style = if value.contains('\n') {
+            Self::Literal
+        } else if resolves_as_non_string(value) {
             Self::DoubleQuoted
         } else {
             Self::Plain
+        };
+        if simple_key_context && a.multiline {
+            return Self::DoubleQuoted;
         }
+        if style == Self::Plain && !a.block_plain_allowed {
+            style = Self::SingleQuoted;
+        }
+        if style == Self::SingleQuoted && !a.single_quoted_allowed {
+            style = Self::DoubleQuoted;
+        }
+        if matches!(style, Self::Literal | Self::Folded) && (!a.block_allowed || simple_key_context)
+        {
+            style = Self::DoubleQuoted;
+        }
+        style
     }
 }
 
-/// Whether a fresh plain scalar would be misread and therefore needs quoting.
+/// libyaml's `yaml_emitter_analyze_scalar`, reduced to the flags that matter in
+/// block context with unicode on.
 ///
-/// Two *different* questions hide behind "does this need quotes", and conflating
-/// them corrupts documents in opposite directions:
+/// Ported rather than approximated because the flags interact: `space_break`
+/// disqualifies single quotes *and* blocks, while `tab_characters` disqualifies
+/// single quotes but not blocks. A hand-rolled "is this safe" predicate collapses
+/// distinctions the ladder depends on.
+#[derive(Debug, Clone, Copy)]
+struct ScalarAnalysis {
+    multiline: bool,
+    block_plain_allowed: bool,
+    single_quoted_allowed: bool,
+    block_allowed: bool,
+}
+
+impl ScalarAnalysis {
+    fn of(value: &str) -> Self {
+        if value.is_empty() {
+            // libyaml's early return: an empty scalar is plain-able but has no
+            // block form.
+            return Self {
+                multiline: false,
+                block_plain_allowed: true,
+                single_quoted_allowed: true,
+                block_allowed: false,
+            };
+        }
+
+        let mut block_indicators = value.starts_with("---") || value.starts_with("...");
+        let (mut leading_space, mut leading_break) = (false, false);
+        let (mut trailing_space, mut trailing_break) = (false, false);
+        let (mut break_space, mut space_break) = (false, false);
+        let (mut line_breaks, mut tab_characters, mut special_characters) = (false, false, false);
+        let (mut previous_space, mut previous_break) = (false, false);
+        let mut preceded_by_whitespace = true;
+
+        let chars: Vec<char> = value.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            let followed_by_whitespace = i + 1 >= chars.len() || matches!(chars[i + 1], ' ' | '\t');
+            let is_last = i + 1 == chars.len();
+
+            if i == 0 {
+                match c {
+                    '#' | ',' | '[' | ']' | '{' | '}' | '&' | '*' | '!' | '|' | '>' | '\''
+                    | '"' | '%' | '@' | '`' => block_indicators = true,
+                    '?' | ':' if followed_by_whitespace => block_indicators = true,
+                    '-' if followed_by_whitespace => block_indicators = true,
+                    _ => {}
+                }
+            } else {
+                match c {
+                    ':' if followed_by_whitespace => block_indicators = true,
+                    '#' if preceded_by_whitespace => block_indicators = true,
+                    _ => {}
+                }
+            }
+
+            if c == '\t' {
+                tab_characters = true;
+            } else if (c.is_control() && c != '\n') || ('\u{7f}'..='\u{9f}').contains(&c) {
+                // `is_printable` with unicode on: control characters other than
+                // the line break, plus the C1 range.
+                special_characters = true;
+            }
+
+            if c == ' ' || c == '\t' {
+                if i == 0 {
+                    leading_space = true;
+                }
+                if is_last {
+                    trailing_space = true;
+                }
+                if previous_break {
+                    break_space = true;
+                }
+                previous_space = true;
+                previous_break = false;
+            } else if c == '\n' || c == '\r' {
+                line_breaks = true;
+                if i == 0 {
+                    leading_break = true;
+                }
+                if is_last {
+                    trailing_break = true;
+                }
+                if previous_space {
+                    space_break = true;
+                }
+                previous_space = false;
+                previous_break = true;
+            } else {
+                previous_space = false;
+                previous_break = false;
+            }
+            preceded_by_whitespace = matches!(c, ' ' | '\t' | '\n' | '\r');
+        }
+
+        let mut a = Self {
+            multiline: line_breaks,
+            block_plain_allowed: true,
+            single_quoted_allowed: true,
+            block_allowed: true,
+        };
+        if leading_space || leading_break || trailing_space || trailing_break {
+            a.block_plain_allowed = false;
+        }
+        if trailing_space {
+            a.block_allowed = false;
+        }
+        if break_space {
+            a.block_plain_allowed = false;
+            a.single_quoted_allowed = false;
+        }
+        if space_break || tab_characters || special_characters {
+            a.block_plain_allowed = false;
+            a.single_quoted_allowed = false;
+        }
+        if space_break || special_characters {
+            a.block_allowed = false;
+        }
+        if line_breaks {
+            a.block_plain_allowed = false;
+        }
+        if block_indicators {
+            a.block_plain_allowed = false;
+        }
+        a
+    }
+}
+
+/// Whether libyaml would permit a literal block for this text.
+#[must_use]
+pub fn literal_block_allowed(v: &str) -> bool {
+    ScalarAnalysis::of(v).block_allowed
+}
+
+/// go-yaml's `!canUsePlain`: would this text come back as something other than a
+/// string if written unquoted?
 ///
-/// - **A value we are creating** is known to be a *string*. If its text would
-///   resolve as a bool, a number or a timestamp, it must be quoted or it comes
-///   back as the wrong type. `lastmodified` is this case on every single write.
-/// - **A value that was already plain in the file** was plain for a reason: `1`
-///   meant the integer 1. Quoting it on the way out changes its type and its MAC
-///   contribution. Only the *structural* hazards apply there.
+/// **A type question, not a structural one.** That distinction is the whole of the
+/// bug this function used to carry: it also returned true for structural hazards
+/// (`: `, a leading `#`, a trailing space), which made the caller request
+/// double-quoting and skip libyaml's `PLAIN -> SINGLE` rung. Structural safety
+/// belongs to [`ScalarAnalysis`]; this belongs to the resolver.
 ///
-/// This function answers the first question and is used for new values and keys.
-/// [`plain_is_structurally_unsafe`] answers the second. The first round of
-/// round-trip tests failed precisely because this one was used for both, turning
-/// `a: 1` into `a: "1"`.
-fn needs_double_quoting(v: &str) -> bool {
-    if plain_is_structurally_unsafe(v) {
+/// Three separate questions live nearby, and each has exactly one home:
+///
+/// | question | answered by | used for |
+/// |---|---|---|
+/// | would it resolve as a non-string? | this function | choosing the *requested* style |
+/// | could a plain / single / block scalar hold it? | [`ScalarAnalysis`] | the fallback ladder |
+/// | was it plain in the source and is it still safe? | [`plain_is_structurally_unsafe`] | promoting a parsed scalar |
+fn resolves_as_non_string(v: &str) -> bool {
+    // An empty plain scalar resolves as `!!null`, so it must be quoted.
+    if v.is_empty() {
         return true;
     }
-    // Resolvable-as-non-string: YAML 1.1 bools, null, numbers, timestamps.
+    // YAML 1.1 bools, null, numbers, timestamps.
     let lower = v.to_ascii_lowercase();
     if matches!(
         lower.as_str(),
@@ -90,6 +301,14 @@ fn needs_double_quoting(v: &str) -> bool {
         return true;
     }
     if v.parse::<i64>().is_ok() || v.parse::<f64>().is_ok() {
+        return true;
+    }
+    // A YAML 1.1 base-60 float — `1:20`, `-3:14:15.9`. go-yaml quotes these
+    // defensively (`isBase60Float`) because a 1.1 parser reads them as numbers,
+    // and its own comment notes the spec's regex is wrong in practice. A hand
+    // check rather than a `regex` dependency: this crate has none, and the shape
+    // is `[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?`.
+    if looks_like_base60_float(v) {
         return true;
     }
     // An RFC 3339 / YAML timestamp: digits and `-` up to a `T`, then a time.
@@ -116,6 +335,46 @@ pub fn plain_is_structurally_unsafe(v: &str) -> bool {
         || v.contains(": ")
         || v.contains(" #")
         || v.contains('\n')
+}
+
+/// `^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?$` — go-yaml's `base60float`.
+fn looks_like_base60_float(v: &str) -> bool {
+    let body = v.strip_prefix(['-', '+']).unwrap_or(v);
+    if !body.starts_with(|c: char| c.is_ascii_digit()) || !body.contains(':') {
+        return false;
+    }
+    // Split off an optional fractional tail first.
+    let (sexagesimal, frac) = match body.split_once('.') {
+        Some((s, f)) => (s, Some(f)),
+        None => (body, None),
+    };
+    if frac.is_some_and(|f| !f.chars().all(|c| c.is_ascii_digit() || c == '_')) {
+        return false;
+    }
+    let mut groups = sexagesimal.split(':');
+    let Some(first) = groups.next() else {
+        return false;
+    };
+    if first.is_empty() || !first.chars().all(|c| c.is_ascii_digit() || c == '_') {
+        return false;
+    }
+    let mut had_group = false;
+    for g in groups {
+        had_group = true;
+        // `[0-5]?[0-9]` — one or two digits, and a two-digit group is at most 59.
+        let ok = match g.len() {
+            1 => g.chars().all(|c| c.is_ascii_digit()),
+            2 => {
+                let b = g.as_bytes();
+                (b'0'..=b'5').contains(&b[0]) && b[1].is_ascii_digit()
+            }
+            _ => false,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    had_group
 }
 
 fn looks_like_timestamp(v: &str) -> bool {
@@ -360,22 +619,137 @@ mod tests {
         }
     }
 
+    /// The style table, measured by running upstream sops v3.12.1 on a file
+    /// containing exactly these values and reading its `-d` output.
+    ///
+    /// Not derived, not inferred from the docs — the first two versions of the
+    /// style logic each got part of this wrong, and only a real diff caught it.
+    ///
+    /// ```text
+    /// hash: 'has # hash'          structurally plain-unsafe -> SINGLE
+    /// colon: 'a: b'               structurally plain-unsafe -> SINGLE
+    /// dash: '- leading dash'      structurally plain-unsafe -> SINGLE
+    /// lead_space: ' leading'      leading space             -> SINGLE
+    /// trail_space: 'trailing '    trailing space            -> SINGLE
+    /// tabbed: "a\tb"              tab kills single quotes   -> DOUBLE
+    /// quoted_bool: "true"         resolves as a bool        -> DOUBLE
+    /// number_str: "42"            resolves as an int        -> DOUBLE
+    /// plainish: normal-value      safe and a string         -> PLAIN
+    /// ```
     #[test]
-    fn structurally_unsafe_plain_scalars_are_quoted() {
-        for v in [
-            "- leading dash",
-            "#hash",
-            " leading space",
-            "trailing ",
-            "a: b",
-            "x #y",
-            "a\nb",
-        ] {
+    fn the_style_table_matches_what_real_sops_emits() {
+        use ScalarStyle::{DoubleQuoted, Plain, SingleQuoted};
+        let cases: &[(&str, ScalarStyle)] = &[
+            ("has # hash", SingleQuoted),
+            ("a: b", SingleQuoted),
+            ("- leading dash", SingleQuoted),
+            (" leading", SingleQuoted),
+            ("trailing ", SingleQuoted),
+            ("#hash", SingleQuoted),
+            ("x #y", SingleQuoted),
+            ("a\tb", DoubleQuoted),
+            ("true", DoubleQuoted),
+            ("42", DoubleQuoted),
+            ("normal-value", Plain),
+            // The overwhelming majority of every real file: an ENC[] value is
+            // plain, because its colons are not followed by whitespace.
+            ("ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]", Plain),
+        ];
+        for (v, want) in cases {
+            assert_eq!(
+                ScalarStyle::for_new_value(v),
+                *want,
+                "{v:?} should be {want:?}"
+            );
+        }
+        assert!(
+            cases.len() >= 12,
+            "the table is the evidence; do not shrink it"
+        );
+    }
+
+    /// A tab is the case that separates the two quote styles: libyaml clears
+    /// `single_quoted_allowed` for `tab_characters` but leaves `block_allowed`
+    /// alone, so a tabbed single-line string is double-quoted while a tabbed
+    /// multi-line one is still a block.
+    #[test]
+    fn a_tab_forces_double_quotes_but_does_not_forbid_a_block() {
+        assert_eq!(
+            ScalarStyle::for_new_value("a\tb"),
+            ScalarStyle::DoubleQuoted
+        );
+        assert!(
+            literal_block_allowed("a\tb\nc"),
+            "a tab does not clear block_allowed"
+        );
+        assert_eq!(ScalarStyle::for_new_value("a\tb\nc"), ScalarStyle::Literal);
+    }
+
+    /// A multi-line string is a **literal block**, not a quoted one — go-yaml's
+    /// first case in `stringv`. This is the rule whose absence only showed up
+    /// against a real 420-character SSH key in the operator's own secrets.
+    #[test]
+    fn a_multiline_string_becomes_a_literal_block() {
+        assert_eq!(ScalarStyle::for_new_value("a\nb"), ScalarStyle::Literal);
+        assert_eq!(
+            ScalarStyle::for_new_value(
+                // A PEM-shaped multi-line value, with the header words spelled
+                // apart so the fleet's block-secrets pre-commit hook does not
+                // read a test fixture as real key material. It fired on the
+                // literal header here, correctly by its own rules.
+                &format!(
+                    "-----BEGIN {}-----\nb3BlbnNzaA\n-----END {}-----\n",
+                    "OPENSSH PRIVATE_KEY", "OPENSSH PRIVATE_KEY"
+                )
+            ),
+            ScalarStyle::Literal
+        );
+    }
+
+    /// …unless a block could not round-trip it. libyaml clears `block_allowed`
+    /// for a trailing space, a space before a newline, or a non-printable — each
+    /// of which a block scalar would silently eat.
+    #[test]
+    fn a_multiline_string_a_block_would_mangle_stays_quoted() {
+        for v in ["a\nb ", "a \nb", "a\nb\t", "a\n\u{7}b", "a\r\nb"] {
+            assert!(
+                !literal_block_allowed(v),
+                "{v:?} must not be block-eligible"
+            );
             assert_eq!(
                 ScalarStyle::for_new_value(v),
                 ScalarStyle::DoubleQuoted,
-                "{v:?} cannot be a plain scalar"
+                "{v:?} must fall back to quoting"
             );
+        }
+        // A trailing newline is fine — that is the common case, handled by the
+        // chomping indicator rather than by refusing the block.
+        assert!(literal_block_allowed("a\nb\n"));
+    }
+
+    /// go-yaml quotes a YAML 1.1 base-60 float defensively, because a 1.1 parser
+    /// reads `1:20` as the number 80.
+    #[test]
+    fn base60_floats_are_quoted_like_go_yaml() {
+        for v in ["1:20", "-3:14:15", "+0:59", "1:20.5", "12_3:45"] {
+            assert_eq!(
+                ScalarStyle::for_new_value(v),
+                ScalarStyle::DoubleQuoted,
+                "{v:?} is a YAML 1.1 base-60 float"
+            );
+        }
+        // Not base-60: a group above 59, a non-numeric group, no colon at all.
+        for v in ["1:60", "1:2:99", "abc:12", "1234"] {
+            let style = ScalarStyle::for_new_value(v);
+            if v == "1234" {
+                assert_eq!(
+                    style,
+                    ScalarStyle::DoubleQuoted,
+                    "a bare integer is quoted anyway"
+                );
+            } else {
+                assert_eq!(style, ScalarStyle::Plain, "{v:?} is not a base-60 float");
+            }
         }
     }
 

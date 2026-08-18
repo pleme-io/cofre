@@ -80,12 +80,12 @@ mod verified;
 
 pub use aad::{Aad, AadPath};
 pub use cipher::{DataKey, Iv, IvStash, decrypt_leaf, encrypt_leaf};
-pub use leaf::{EncryptedLeaf, LeafType, Plaintext};
+pub use leaf::{EncryptedLeaf, LeafType, Plaintext, format_go_float_f};
 pub use mac::{
     MAC_ONLY_ENCRYPTED_SEED, Mac, MacAccumulator, mac_field_aad, seal_mac_field, verify_mac_field,
 };
 pub use metadata::{AgeKey, KeyProvider, Metadata, WrappedKey};
-pub use selector::{DEFAULT_UNENCRYPTED_SUFFIX, EncryptionSelector, Selection};
+pub use selector::{DEFAULT_UNENCRYPTED_SUFFIX, EncryptionSelector, Selection, regex_is_match};
 pub use verified::Unverified;
 
 /// Everything that can go wrong inside the wire border.
