@@ -291,14 +291,27 @@ fn plaintext_from_yaml(scalar: &Scalar) -> Plaintext {
         return Plaintext::string(scalar.value.clone());
     }
     let v = &scalar.value;
-    // YAML 1.1 bools, as go-yaml's resolver accepts them.
+    // go-yaml v3's `resolveMap`, exactly. Six bool spellings and no more:
+    //
+    //   {true,  boolTag, ["true", "True", "TRUE"]}
+    //   {false, boolTag, ["false", "False", "FALSE"]}
+    //   {nil,   nullTag, ["", "~", "null", "Null", "NULL"]}
+    //
+    // **`y`, `yes`, `on`, `n`, `no`, `off` are STRINGS here.** yaml.v3 dropped
+    // YAML 1.1's boolean set; `isOldBool` exists only to keep *quoting* them on
+    // the way out, which is a different question and a different function. The
+    // first version of this resolver accepted the 1.1 set, so a plaintext
+    // `value: y` was encrypted as `type:bool` and came back as `true` — a value
+    // changed by a round-trip, caught by the differential and by nothing else.
+    //
+    // Matching is case-exact, not case-folded: `TRUE` is a bool and `tRuE` is a
+    // string, because the table lists spellings rather than a predicate.
     match v.as_str() {
-        "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" | "y" | "Y" => {
-            return Plaintext::boolean(true);
-        }
-        "false" | "False" | "FALSE" | "no" | "No" | "NO" | "off" | "Off" | "OFF" | "n" | "N" => {
-            return Plaintext::boolean(false);
-        }
+        "true" | "True" | "TRUE" => return Plaintext::boolean(true),
+        "false" | "False" | "FALSE" => return Plaintext::boolean(false),
+        // A null leaf has no `ENC[]` spelling — `Cipher.Encrypt` has no nil arm
+        // and `walkValue` returns nil unchanged — so it stays a string here and
+        // the selector-driven walk leaves it alone.
         _ => {}
     }
     if let Ok(i) = v.parse::<i64>() {

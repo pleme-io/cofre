@@ -281,22 +281,63 @@ fn resolves_as_non_string(v: &str) -> bool {
     if v.is_empty() {
         return true;
     }
-    // YAML 1.1 bools, null, numbers, timestamps.
-    let lower = v.to_ascii_lowercase();
+    // Two separate lists, both taken verbatim from go-yaml v3.
+    //
+    // `resolveMap` — what actually resolves as a non-string, case-exact:
+    //     bool  true True TRUE false False FALSE
+    //     null  (empty) ~ null Null NULL
+    //     float .nan .NaN .NAN  .inf .Inf .INF  +.inf +.Inf +.INF  -.inf -.Inf -.INF
+    //     merge <<
     if matches!(
-        lower.as_str(),
-        "y" | "n"
-            | "yes"
-            | "no"
-            | "true"
+        v,
+        "true"
+            | "True"
+            | "TRUE"
             | "false"
-            | "on"
-            | "off"
-            | "null"
+            | "False"
+            | "FALSE"
             | "~"
+            | "null"
+            | "Null"
+            | "NULL"
             | ".nan"
+            | ".NaN"
+            | ".NAN"
             | ".inf"
+            | ".Inf"
+            | ".INF"
+            | "+.inf"
+            | "+.Inf"
+            | "+.INF"
             | "-.inf"
+            | "-.Inf"
+            | "-.INF"
+            | "<<"
+    ) {
+        return true;
+    }
+    // `isOldBool` — the YAML 1.1 boolean set. These do NOT resolve as bools in
+    // yaml.v3, but they are still quoted on the way out "so that the marshalled
+    // output [is] valid for YAML 1.1 parsing". So they belong here (an emission
+    // question) and NOT in the decode resolver, which is the distinction the
+    // `value: y` bug turned on.
+    if matches!(
+        v,
+        "y" | "Y"
+            | "yes"
+            | "Yes"
+            | "YES"
+            | "on"
+            | "On"
+            | "ON"
+            | "n"
+            | "N"
+            | "no"
+            | "No"
+            | "NO"
+            | "off"
+            | "Off"
+            | "OFF"
     ) {
         return true;
     }
