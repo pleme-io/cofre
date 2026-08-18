@@ -161,6 +161,21 @@ Plans are usually rendered by an upstream typescape and consumed by
 - [`docs/backends.md`](docs/backends.md) — implementing a custom `SecretBackend`.
 - [`docs/generation-policies.md`](docs/generation-policies.md) — every policy + its CSPRNG semantics.
 
+### suminuri (墨塗り) — sops, naturalized
+
+The workspace also carries `suminuri-wire`, `suminuri-yaml` and `suminuri`: a
+native, sops-wire-compatible encrypted-file tool that can be aliased as `sops`.
+It exists because cofre's own `SopsBackend` drives the real `sops` binary through
+an `EDITOR` hijack — a wrap — and because two repos plus cofre itself had each
+ported that same trick.
+
+- [`docs/SUMINURI.md`](docs/SUMINURI.md) — what was built, the tier-honest ledger,
+  and the cutover specified step by step (nothing is flipped yet).
+- [`docs/WIRE-FORMAT.md`](docs/WIRE-FORMAT.md) — the sops format as **measured**
+  from its Go source and from running both binaries. Read this before touching the
+  envelope: the nonce is 32 bytes, the MAC is a bare SHA-512, and a float has two
+  different spellings depending on which side of the cipher it is on.
+
 ## License
 
 Dual-licensed under MIT or Apache-2.0. Pick whichever fits your project.
