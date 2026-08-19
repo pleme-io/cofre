@@ -53,6 +53,30 @@ pub enum AppError {
         "refusing to encrypt with no recipients: nothing would ever be able to decrypt the result"
     )]
     NoRecipients,
+    #[error("`{verb}` needs a path argument, e.g. suminuri {verb} f.yaml '[\"db\"][\"password\"]'")]
+    MissingPath { verb: String },
+    #[error("`set` needs a value argument; sops takes JSON, e.g. '\"text\"' or '42'")]
+    MissingValue,
+    #[error(
+        "`set` value `{value}` is a JSON {kind}, and this build writes scalars only. Use `suminuri edit` for a composite, or upstream `sops set`."
+    )]
+    NonScalarValue { value: String, kind: String },
+    #[error("`{value}` is not valid JSON for a value; a string needs its quotes, e.g. '\"text\"'")]
+    BadValue { value: String },
+    #[error(
+        "cannot descend through `{at}` in `{path}`: that step names a {found}, not a mapping or sequence"
+    )]
+    PathNotTraversable {
+        path: String,
+        at: String,
+        found: String,
+    },
+    #[error("`unset` found nothing at `{path}`; refusing to report success for a no-op")]
+    UnsetNotFound { path: String },
+    #[error(
+        "`set` cannot create index {index} in `{path}`: a sequence grows by append only, and index {index} would leave a hole"
+    )]
+    SparseIndex { path: String, index: usize },
 }
 
 /// What a run produced.
@@ -114,6 +138,8 @@ pub fn run(
         Verb::Rotate => rotate(inv, env, out),
         Verb::UpdateKeys => update_keys(inv, env),
         Verb::FileStatus => file_status(inv, env, out),
+        Verb::Set => set_or_unset(inv, env, false),
+        Verb::Unset => set_or_unset(inv, env, true),
     }
 }
 
@@ -598,16 +624,16 @@ fn apply_selector_options(
 
 /// `--extract '["a"]["b"][0]'` — sops's bracket path syntax.
 fn extract(tree: &Value, path_expr: &str) -> Result<String, AppError> {
-    let steps = parse_extract_path(path_expr).ok_or_else(|| AppError::BadExtractPath {
+    let steps = parse_sops_path(path_expr).ok_or_else(|| AppError::BadExtractPath {
         path: path_expr.to_string(),
     })?;
     let mut current = tree;
     for step in &steps {
         current = match step {
-            ExtractStep::Key(k) => current.get(k).ok_or_else(|| AppError::ExtractNotFound {
+            PathStep::Key(k) => current.get(k).ok_or_else(|| AppError::ExtractNotFound {
                 path: path_expr.to_string(),
             })?,
-            ExtractStep::Index(i) => match current {
+            PathStep::Index(i) => match current {
                 Value::Sequence(entries) => entries
                     .iter()
                     .filter_map(|e| match e {
@@ -644,7 +670,7 @@ fn extract(tree: &Value, path_expr: &str) -> Result<String, AppError> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ExtractStep {
+enum PathStep {
     Key(String),
     Index(usize),
 }
@@ -652,8 +678,10 @@ enum ExtractStep {
 /// Parse `["a"]["b"][0]` into steps.
 ///
 /// Strict: a malformed expression is `None` rather than a best-effort read. An
-/// `--extract` that silently matched the wrong key would print the wrong secret.
-fn parse_extract_path(expr: &str) -> Option<Vec<ExtractStep>> {
+/// `--extract` that silently matched the wrong key would print the wrong secret —
+/// and now that `set` shares this parser, a best-effort read would *write* to the
+/// wrong key, which is worse and unrecoverable.
+fn parse_sops_path(expr: &str) -> Option<Vec<PathStep>> {
     let mut steps = Vec::new();
     let mut rest = expr.trim();
     if rest.is_empty() {
@@ -664,15 +692,396 @@ fn parse_extract_path(expr: &str) -> Option<Vec<ExtractStep>> {
         let (inner, tail) = rest.split_once(']')?;
         let inner = inner.trim();
         if let Some(quoted) = inner.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-            steps.push(ExtractStep::Key(quoted.to_string()));
+            steps.push(PathStep::Key(quoted.to_string()));
         } else if let Some(quoted) = inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-            steps.push(ExtractStep::Key(quoted.to_string()));
+            steps.push(PathStep::Key(quoted.to_string()));
         } else {
-            steps.push(ExtractStep::Index(inner.parse::<usize>().ok()?));
+            steps.push(PathStep::Index(inner.parse::<usize>().ok()?));
         }
         rest = tail;
     }
     Some(steps)
+}
+
+/// `set <file> <path> <value>` and `unset <file> <path>`.
+///
+/// ★ WHY THESE SHARE ONE FUNCTION WITH `edit`'S SHAPE AND NOT ITS CODE
+///
+/// Both are `edit` with the editor replaced by a programmatic mutation, so they reuse
+/// `open` (which yields the file, the data key **and the IV stash**) and `f.encrypt`.
+/// The stash is the load-bearing part: it re-uses each untouched leaf's original
+/// nonce, so writing one key leaves every other line byte-identical. Without it a
+/// one-key `set` would rewrite every ciphertext in the file and a reviewer could not
+/// see what changed — the same reason `rotate` deliberately does NOT reuse it.
+///
+/// ★ AND WHY THERE IS NO SCRATCH FILE HERE
+///
+/// `edit` must put plaintext on a disk for an editor to open. These verbs never do —
+/// the mutation happens in the decrypted tree in memory. That removes the exposure
+/// `edit` can only mitigate, so this path is strictly safer than the one it replaces
+/// for the fleet's actual use (`tools/init-akeyless-dev.tlisp` shelling out to
+/// `sops set`).
+fn set_or_unset(
+    inv: &Invocation,
+    env: &dyn Environment,
+    remove: bool,
+) -> Result<Outcome, AppError> {
+    let verb = if remove { "unset" } else { "set" };
+    let path = file_of(inv)?;
+    let path_expr = inv
+        .path_expr
+        .as_deref()
+        .ok_or_else(|| AppError::MissingPath {
+            verb: verb.to_string(),
+        })?;
+    let steps = parse_sops_path(path_expr).ok_or_else(|| AppError::BadExtractPath {
+        path: path_expr.to_string(),
+    })?;
+
+    // Parse the value BEFORE decrypting anything. A malformed value should cost the
+    // caller an error message, not a decrypt-then-fail that leaves the data key
+    // material in this process for no reason.
+    let new_value = if remove {
+        None
+    } else {
+        let raw = inv.value_expr.as_deref().ok_or(AppError::MissingValue)?;
+        Some(parse_json_scalar(raw)?)
+    };
+
+    let (mut f, key, mut stash) = open(inv, env)?;
+    let before = f.render_plain()?;
+
+    apply_mutation(&mut f.tree, &steps, path_expr, new_value)?;
+
+    let after = f.render_plain()?;
+    if after == before {
+        // sops's documented exit 200, same contract `edit` honours: cofre's SOPS
+        // backend branches on this exact value. Setting a key to what it already
+        // holds is a no-op, and reporting it as a write would make every caller's
+        // "did anything change" check lie.
+        return Ok(Outcome::unchanged());
+    }
+
+    let stats = f.encrypt(&key, &mut stash, &env.now_rfc3339())?;
+    let body = f.render()?;
+    env.write_file_atomic(path, &body, SECRET_MODE)
+        .map_err(|e| AppError::Io {
+            path: path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+    Ok(Outcome::ok_with(format!(
+        "{verb} {path_expr}: re-encrypted {} leaf/leaves",
+        stats.encrypted
+    )))
+}
+
+/// Walk to the parent of the final step, then insert or remove.
+///
+/// Missing intermediate MAPPING keys are created, matching upstream `sops set`.
+/// Missing sequence indices are refused — see `AppError::SparseIndex`.
+fn apply_mutation(
+    tree: &mut Value,
+    steps: &[PathStep],
+    path_expr: &str,
+    new_value: Option<suminuri_yaml::Scalar>,
+) -> Result<(), AppError> {
+    let Some((last, parents)) = steps.split_last() else {
+        return Err(AppError::BadExtractPath {
+            path: path_expr.to_string(),
+        });
+    };
+
+    let mut current = tree;
+    for step in parents {
+        current = descend(current, step, path_expr, new_value.is_some())?;
+    }
+
+    match (last, new_value) {
+        (PathStep::Key(k), Some(scalar)) => {
+            let items = as_mapping(current, path_expr, last)?;
+            if let Some(slot) = items.iter_mut().find_map(|i| match i {
+                suminuri_yaml::Item::Pair { key, value } if key == k => Some(value),
+                _ => None,
+            }) {
+                *slot = Value::Scalar(scalar);
+            } else {
+                items.push(suminuri_yaml::Item::Pair {
+                    key: k.clone(),
+                    value: Value::Scalar(scalar),
+                });
+            }
+            Ok(())
+        }
+        (PathStep::Key(k), None) => {
+            let items = as_mapping(current, path_expr, last)?;
+            let before = items.len();
+            items.retain(|i| !matches!(i, suminuri_yaml::Item::Pair { key, .. } if key == k));
+            if items.len() == before {
+                Err(AppError::UnsetNotFound {
+                    path: path_expr.to_string(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+        (PathStep::Index(idx), Some(scalar)) => {
+            let entries = as_sequence(current, path_expr, last)?;
+            // Counted BEFORE the match: `value_slot` takes a mutable borrow that is
+            // still live in the arms, so reading the length inside a guard is an
+            // E0502. The append case needs the count, so it is taken up front.
+            let n = value_count(entries);
+            match value_slot(entries, *idx) {
+                Some(slot) => {
+                    *slot = Value::Scalar(scalar);
+                    Ok(())
+                }
+                None if *idx == n => {
+                    entries.push(suminuri_yaml::Entry::Value(Value::Scalar(scalar)));
+                    Ok(())
+                }
+                None => Err(AppError::SparseIndex {
+                    path: path_expr.to_string(),
+                    index: *idx,
+                }),
+            }
+        }
+        (PathStep::Index(idx), None) => {
+            let entries = as_sequence(current, path_expr, last)?;
+            let mut seen = 0usize;
+            let mut victim = None;
+            for (pos, e) in entries.iter().enumerate() {
+                if matches!(e, suminuri_yaml::Entry::Value(_)) {
+                    if seen == *idx {
+                        victim = Some(pos);
+                        break;
+                    }
+                    seen += 1;
+                }
+            }
+            match victim {
+                Some(pos) => {
+                    entries.remove(pos);
+                    Ok(())
+                }
+                None => Err(AppError::UnsetNotFound {
+                    path: path_expr.to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// One step down, creating a missing mapping key when we are writing.
+fn descend<'t>(
+    current: &'t mut Value,
+    step: &PathStep,
+    path_expr: &str,
+    creating: bool,
+) -> Result<&'t mut Value, AppError> {
+    match step {
+        PathStep::Key(k) => {
+            let items = as_mapping(current, path_expr, step)?;
+            let existing = items
+                .iter()
+                .any(|i| matches!(i, suminuri_yaml::Item::Pair { key, .. } if key == k));
+            if !existing {
+                if !creating {
+                    return Err(AppError::UnsetNotFound {
+                        path: path_expr.to_string(),
+                    });
+                }
+                items.push(suminuri_yaml::Item::Pair {
+                    key: k.clone(),
+                    value: Value::Mapping(Vec::new()),
+                });
+            }
+            items
+                .iter_mut()
+                .find_map(|i| match i {
+                    suminuri_yaml::Item::Pair { key, value } if key == k => Some(value),
+                    _ => None,
+                })
+                .ok_or_else(|| AppError::UnsetNotFound {
+                    path: path_expr.to_string(),
+                })
+        }
+        PathStep::Index(idx) => {
+            let entries = as_sequence(current, path_expr, step)?;
+            let n = value_count(entries);
+            value_slot(entries, *idx).ok_or_else(|| {
+                if creating && *idx >= n {
+                    AppError::SparseIndex {
+                        path: path_expr.to_string(),
+                        index: *idx,
+                    }
+                } else {
+                    AppError::UnsetNotFound {
+                        path: path_expr.to_string(),
+                    }
+                }
+            })
+        }
+    }
+}
+
+fn as_mapping<'t>(
+    v: &'t mut Value,
+    path_expr: &str,
+    step: &PathStep,
+) -> Result<&'t mut Vec<suminuri_yaml::Item>, AppError> {
+    let found = describe(v);
+    match v {
+        Value::Mapping(items) => Ok(items),
+        _ => Err(AppError::PathNotTraversable {
+            path: path_expr.to_string(),
+            at: step_label(step),
+            found: found.to_string(),
+        }),
+    }
+}
+
+fn as_sequence<'t>(
+    v: &'t mut Value,
+    path_expr: &str,
+    step: &PathStep,
+) -> Result<&'t mut Vec<suminuri_yaml::Entry>, AppError> {
+    let found = describe(v);
+    match v {
+        Value::Sequence(entries) => Ok(entries),
+        _ => Err(AppError::PathNotTraversable {
+            path: path_expr.to_string(),
+            at: step_label(step),
+            found: found.to_string(),
+        }),
+    }
+}
+
+fn describe(v: &Value) -> &'static str {
+    match v {
+        Value::Scalar(_) => "scalar",
+        Value::Mapping(_) => "mapping",
+        Value::Sequence(_) => "sequence",
+    }
+}
+
+fn step_label(step: &PathStep) -> String {
+    match step {
+        PathStep::Key(k) => format!("[\"{k}\"]"),
+        PathStep::Index(i) => format!("[{i}]"),
+    }
+}
+
+/// Comments occupy positions in a sequence but are not values, so an index has to
+/// count values only — otherwise `["list"][0]` means different things before and
+/// after somebody adds a comment above the first entry.
+fn value_count(entries: &[suminuri_yaml::Entry]) -> usize {
+    entries
+        .iter()
+        .filter(|e| matches!(e, suminuri_yaml::Entry::Value(_)))
+        .count()
+}
+
+fn value_slot(entries: &mut [suminuri_yaml::Entry], idx: usize) -> Option<&mut Value> {
+    entries
+        .iter_mut()
+        .filter_map(|e| match e {
+            suminuri_yaml::Entry::Value(v) => Some(v),
+            suminuri_yaml::Entry::Comment(_) => None,
+        })
+        .nth(idx)
+}
+
+/// sops takes `set`'s value as JSON. This build accepts the SCALAR subset and
+/// refuses composites by name.
+///
+/// ★ THE SCOPE IS MEASURED, NOT ARBITRARY. Every use of `sops set` found in the
+/// fleet writes a scalar string: an auth key, an API key, a wireguard private key.
+/// Supporting `{...}` and `[...]` would mean either a JSON parser (a net-new
+/// dependency for a case nothing exercises) or routing the text through the YAML
+/// parser, which has **no flow-style support** — it would parse `{"a":"b"}` as a
+/// plain scalar containing braces and write that literal string into the file. A
+/// wrong-but-successful write of a secret is the worst outcome available here, so
+/// the composite case is refused rather than approximated.
+fn parse_json_scalar(raw: &str) -> Result<suminuri_yaml::Scalar, AppError> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err(AppError::BadValue {
+            value: raw.to_string(),
+        });
+    }
+    let kind = match t.as_bytes()[0] {
+        b'{' => Some("object"),
+        b'[' => Some("array"),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        return Err(AppError::NonScalarValue {
+            value: raw.to_string(),
+            kind: kind.to_string(),
+        });
+    }
+
+    // A JSON string: strip the quotes and honour the escapes JSON defines. Anything
+    // else is refused rather than passed through, because an unrecognised escape
+    // silently written into a secret is undetectable downstream.
+    //
+    // ★ RED-RUN 2026-08-19: returning `t` unstripped here (the plausible off-by-one)
+    // turns `both_binaries_set_a_key_to_the_same_result` red with
+    // `want: alpha: '"differential"'` / `got: alpha: differential` — the oracle
+    // reading OUR file sees the quotes we failed to strip. `unset` stays green,
+    // correctly, since it parses no value.
+    if let Some(body) = t.strip_prefix('"') {
+        let body = body.strip_suffix('"').ok_or_else(|| AppError::BadValue {
+            value: raw.to_string(),
+        })?;
+        let mut s = String::with_capacity(body.len());
+        let mut chars = body.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                s.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('"') => s.push('"'),
+                Some('\\') => s.push('\\'),
+                Some('/') => s.push('/'),
+                Some('n') => s.push('\n'),
+                Some('t') => s.push('\t'),
+                Some('r') => s.push('\r'),
+                Some('b') => s.push('\u{8}'),
+                Some('f') => s.push('\u{c}'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| AppError::BadValue {
+                        value: raw.to_string(),
+                    })?;
+                    s.push(char::from_u32(cp).ok_or_else(|| AppError::BadValue {
+                        value: raw.to_string(),
+                    })?);
+                }
+                _ => {
+                    return Err(AppError::BadValue {
+                        value: raw.to_string(),
+                    });
+                }
+            }
+        }
+        return Ok(suminuri_yaml::Scalar::new(s));
+    }
+
+    // A bare token: a number, a boolean, or null. `Scalar::new` picks the style that
+    // round-trips, so a numeric-looking string is not silently retyped.
+    if t == "true" || t == "false" || t == "null" || t.parse::<f64>().is_ok() {
+        return Ok(suminuri_yaml::Scalar::new(t));
+    }
+
+    // An unquoted word. sops would reject it as invalid JSON and so do we: accepting
+    // it would make `sops set f '["k"]' hunter2` write `hunter2` while
+    // `sops set f '["k"]' '"hunter2"'` writes the same thing, and then a caller who
+    // forgot the quotes on `123` would get a number where they meant a string.
+    Err(AppError::BadValue {
+        value: raw.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -735,6 +1144,222 @@ mod tests {
     }
 
     const PLAIN: &str = "alpha: one\ncount: 3\nenabled: true\n";
+
+    /// Encrypt PLAIN, then run `args` against the result, returning the file the
+    /// run left behind. Every `set`/`unset` test needs this exact three-step dance.
+    fn after_write(w: &World, args: &[&str]) -> Result<(Outcome, String), AppError> {
+        let (_, encrypted) =
+            run_capture(&["-e", "/repo/plain.yaml"], &w.seeded()).expect("encrypt");
+        let env = w.env(&[("/repo/enc.yaml", &encrypted)]);
+        let outcome = run_capture(args, &env).map(|(o, _)| o)?;
+        let body = env
+            .read_to_string(std::path::Path::new("/repo/enc.yaml"))
+            .expect("file back");
+        Ok((outcome, body))
+    }
+
+    fn decrypted(w: &World, body: &str) -> String {
+        let env = w.env(&[("/repo/round.yaml", body)]);
+        run_capture(&["-d", "/repo/round.yaml"], &env)
+            .expect("decrypt")
+            .1
+    }
+
+    #[test]
+    fn set_writes_one_leaf_and_it_round_trips() {
+        let w = World::new();
+        let (outcome, body) =
+            after_write(&w, &["set", "/repo/enc.yaml", "[\"alpha\"]", "\"two\""]).expect("set");
+        assert_eq!(outcome.code, exit::OK);
+        assert!(body.contains("ENC[AES256_GCM,"), "still encrypted");
+        assert!(
+            !body.contains("two"),
+            "the new value must not appear in plaintext"
+        );
+        assert_eq!(
+            decrypted(&w, &body),
+            "alpha: two\ncount: 3\nenabled: true\n"
+        );
+    }
+
+    #[test]
+    fn set_creates_a_missing_nested_key() {
+        let w = World::new();
+        let (_, body) = after_write(
+            &w,
+            &[
+                "set",
+                "/repo/enc.yaml",
+                "[\"db\"][\"handle\"]",
+                "\"marker\"",
+            ],
+        )
+        .expect("set");
+        let plain = decrypted(&w, &body);
+        assert!(plain.contains("db:"), "parent created: {plain}");
+        // Deliberately NOT a credential-shaped fixture. `password: <literal>` is
+        // exactly what the block-secrets pre-commit hook refuses, and it refused
+        // this file when the fixture used one — correctly, since the hook cannot
+        // tell a test's fake from a real leak. The key names are incidental to what
+        // this test proves, so they moved rather than the hook being bypassed.
+        assert!(plain.contains("handle:"));
+        assert!(plain.contains("handle: marker"));
+    }
+
+    /// ★ THE PROPERTY THAT MAKES A ONE-KEY WRITE REVIEWABLE.
+    ///
+    /// Writing one leaf must leave every OTHER ciphertext byte-identical — that is
+    /// what the IV stash buys. Without it a `set` rewrites every value in the file
+    /// and no reviewer can see which one actually changed.
+    #[test]
+    fn set_leaves_untouched_leaves_byte_identical() {
+        let w = World::new();
+        let (_, encrypted) =
+            run_capture(&["-e", "/repo/plain.yaml"], &w.seeded()).expect("encrypt");
+        let env = w.env(&[("/repo/enc.yaml", &encrypted)]);
+        run_capture(&["set", "/repo/enc.yaml", "[\"alpha\"]", "\"two\""], &env).expect("set");
+        let after = env
+            .read_to_string(std::path::Path::new("/repo/enc.yaml"))
+            .expect("file back");
+
+        let line = |s: &str, k: &str| -> String {
+            s.lines()
+                .find(|l| l.starts_with(k))
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_ne!(
+            line(&encrypted, "alpha:"),
+            line(&after, "alpha:"),
+            "the written leaf must change"
+        );
+        assert_eq!(
+            line(&encrypted, "count:"),
+            line(&after, "count:"),
+            "an untouched leaf must keep its exact ciphertext"
+        );
+        assert_eq!(line(&encrypted, "enabled:"), line(&after, "enabled:"));
+    }
+
+    #[test]
+    fn setting_a_value_to_what_it_already_holds_is_exit_200() {
+        let w = World::new();
+        let (outcome, _) =
+            after_write(&w, &["set", "/repo/enc.yaml", "[\"alpha\"]", "\"one\""]).expect("set");
+        assert_eq!(
+            outcome.code,
+            exit::FILE_HAS_NOT_CHANGED,
+            "a no-op write reports sops's 200, not success"
+        );
+    }
+
+    #[test]
+    fn unset_removes_a_leaf() {
+        let w = World::new();
+        let (outcome, body) =
+            after_write(&w, &["unset", "/repo/enc.yaml", "[\"count\"]"]).expect("unset");
+        assert_eq!(outcome.code, exit::OK);
+        assert_eq!(decrypted(&w, &body), "alpha: one\nenabled: true\n");
+    }
+
+    #[test]
+    fn unset_of_a_missing_key_is_refused_not_reported_as_success() {
+        let w = World::new();
+        let err =
+            after_write(&w, &["unset", "/repo/enc.yaml", "[\"nope\"]"]).expect_err("must refuse");
+        assert!(matches!(err, AppError::UnsetNotFound { .. }), "got {err:?}");
+    }
+
+    /// A composite value is REFUSED, never approximated. The YAML parser has no
+    /// flow-style support, so passing `{"a":"b"}` through would write that literal
+    /// string as a scalar — a successful write of the wrong secret.
+    #[test]
+    fn composite_values_are_refused_by_name() {
+        for (raw, kind) in [("{\"a\":\"b\"}", "object"), ("[1,2]", "array")] {
+            let err = parse_json_scalar(raw).expect_err("must refuse");
+            match err {
+                AppError::NonScalarValue { kind: k, .. } => assert_eq!(k, kind),
+                other => panic!("wrong error for {raw}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn set_values_parse_as_json_scalars() {
+        assert_eq!(parse_json_scalar("\"text\"").unwrap().value, "text");
+        assert_eq!(parse_json_scalar("42").unwrap().value, "42");
+        assert_eq!(parse_json_scalar("true").unwrap().value, "true");
+        assert_eq!(parse_json_scalar("null").unwrap().value, "null");
+        assert_eq!(parse_json_scalar("\"a\\nb\"").unwrap().value, "a\nb");
+        assert_eq!(parse_json_scalar("\"q\\\"q\"").unwrap().value, "q\"q");
+        // An unquoted word is invalid JSON and is refused rather than guessed at.
+        assert!(matches!(
+            parse_json_scalar("hunter2"),
+            Err(AppError::BadValue { .. })
+        ));
+        // An unterminated string, and a bad escape.
+        assert!(matches!(
+            parse_json_scalar("\"open"),
+            Err(AppError::BadValue { .. })
+        ));
+        assert!(matches!(
+            parse_json_scalar("\"bad\\q\""),
+            Err(AppError::BadValue { .. })
+        ));
+    }
+
+    #[test]
+    fn set_through_a_scalar_names_the_step_that_failed() {
+        let w = World::new();
+        let err = after_write(
+            &w,
+            &["set", "/repo/enc.yaml", "[\"alpha\"][\"deeper\"]", "\"v\""],
+        )
+        .expect_err("must refuse");
+        match err {
+            AppError::PathNotTraversable { at, found, .. } => {
+                assert_eq!(found, "scalar");
+                assert_eq!(at, "[\"deeper\"]");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_and_unset_need_their_arguments() {
+        let w = World::new();
+        assert!(matches!(
+            after_write(&w, &["set", "/repo/enc.yaml"]),
+            Err(AppError::MissingPath { .. })
+        ));
+        assert!(matches!(
+            after_write(&w, &["set", "/repo/enc.yaml", "[\"alpha\"]"]),
+            Err(AppError::MissingValue)
+        ));
+        assert!(matches!(
+            after_write(&w, &["unset", "/repo/enc.yaml"]),
+            Err(AppError::MissingPath { .. })
+        ));
+    }
+
+    #[test]
+    fn set_is_no_longer_an_unimplemented_verb() {
+        // The regression this whole verb exists to fix: `sops set` was refused, and
+        // `tools/init-akeyless-dev.tlisp` calls it.
+        assert!(matches!(
+            inv(&["set", "f.yaml", "[\"k\"]", "\"v\""]).verb,
+            Verb::Set
+        ));
+        assert!(matches!(
+            inv(&["unset", "f.yaml", "[\"k\"]"]).verb,
+            Verb::Unset
+        ));
+        // And the ones the fleet does NOT use stay refused.
+        assert!(matches!(
+            inv(&["exec-env", "f.yaml", "cmd"]).verb,
+            Verb::Unimplemented(_)
+        ));
+    }
 
     #[test]
     fn encrypt_then_decrypt_through_the_cli_surface() {
@@ -821,24 +1446,24 @@ mod tests {
     #[test]
     fn extract_paths_parse_the_way_sops_writes_them() {
         assert_eq!(
-            parse_extract_path("[\"db\"][\"password\"]"),
+            parse_sops_path("[\"db\"][\"password\"]"),
             Some(vec![
-                ExtractStep::Key("db".into()),
-                ExtractStep::Key("password".into())
+                PathStep::Key("db".into()),
+                PathStep::Key("password".into())
             ])
         );
         assert_eq!(
-            parse_extract_path("[\"list\"][2]"),
-            Some(vec![ExtractStep::Key("list".into()), ExtractStep::Index(2)])
+            parse_sops_path("[\"list\"][2]"),
+            Some(vec![PathStep::Key("list".into()), PathStep::Index(2)])
         );
         assert_eq!(
-            parse_extract_path("['single']"),
-            Some(vec![ExtractStep::Key("single".into())])
+            parse_sops_path("['single']"),
+            Some(vec![PathStep::Key("single".into())])
         );
         // Malformed is None, never a best-effort guess.
-        assert_eq!(parse_extract_path("db.password"), None);
-        assert_eq!(parse_extract_path("[\"unclosed"), None);
-        assert_eq!(parse_extract_path(""), None);
+        assert_eq!(parse_sops_path("db.password"), None);
+        assert_eq!(parse_sops_path("[\"unclosed"), None);
+        assert_eq!(parse_sops_path(""), None);
     }
 
     /// An unchanged edit must be exit 200, because cofre's SOPS backend branches on
