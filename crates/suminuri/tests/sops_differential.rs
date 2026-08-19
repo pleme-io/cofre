@@ -103,11 +103,72 @@ fn our_binary() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+/// What a candidate oracle binary says it is.
+///
+/// ★ THE POSITIVE CONTROL THIS GATE WAS MISSING, AND THE ALIAS IS WHY IT NEEDS ONE.
+///
+/// The oracle used to be `find_on_path("sops")`. That was correct right up to the
+/// moment the fleet overlay made `sops` resolve to **suminuri** — after which this
+/// entire file compared suminuri against suminuri and reported green. Measured on
+/// cid 2026-08-19: a full 289-test run passed with `sops --version` printing
+/// `suminuri 0.1.8`.
+///
+/// A differential whose oracle is the implementation under test proves nothing, and
+/// it fails *silently* — every assertion holds trivially. So the identity of the
+/// oracle is now checked rather than assumed, and a candidate that identifies as
+/// suminuri is refused outright instead of used.
+fn identifies_as_suminuri(bin: &Path) -> bool {
+    Command::new(bin)
+        .arg("--version")
+        .env("SOPS_DISABLE_VERSION_CHECK", "1")
+        .output()
+        .map(|o| {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            text.to_lowercase().contains("suminuri")
+        })
+        // A candidate we cannot even run is not a usable oracle either; treat it as
+        // unusable rather than silently accepting it.
+        .unwrap_or(true)
+}
+
+/// Find a real upstream sops, in the order that survives the alias being live.
+///
+/// `sops-upstream` first: the fleet overlay binds that name to the Go binary
+/// precisely so an upstream is still reachable once `sops` has been rebound. Plain
+/// `sops` is still tried, because on a machine that has not adopted the overlay it
+/// *is* upstream — but it is identity-checked either way.
+fn find_oracle() -> Option<PathBuf> {
+    // An EXPLICIT oracle is honoured strictly: if the operator names a binary and
+    // it turns out to be us, that is a hard error, not something to route around.
+    // Quietly substituting a different binary than the one asked for is its own
+    // form of dishonesty — the run would report green about a comparison nobody
+    // requested. (The first version of this function *did* fall through, which is
+    // why its own red run came out green.)
+    if let Some(explicit) = std::env::var_os("SUMINURI_SOPS_ORACLE").map(PathBuf::from) {
+        assert!(
+            !identifies_as_suminuri(&explicit),
+            "SUMINURI_SOPS_ORACLE points at {}, which identifies as suminuri.\n\nThat is the implementation under test, not an oracle — every assertion in this\nfile would hold trivially and the run would report green while comparing nothing.\nPoint it at a real upstream sops (on a fleet node: `sops-upstream`).",
+            explicit.display()
+        );
+        return Some(explicit);
+    }
+    // Discovered candidates: prefer the name the fleet overlay reserves for
+    // upstream, then plain `sops` for a machine that never adopted the overlay.
+    // Skip — rather than refuse — anything that identifies as suminuri, because a
+    // rebound `sops` on PATH is the expected state, not an operator error.
+    [find_on_path("sops-upstream"), find_on_path("sops")]
+        .into_iter()
+        .flatten()
+        .find(|c| !identifies_as_suminuri(c))
+}
+
 impl Oracle {
     fn discover() -> Option<Self> {
-        let sops = std::env::var_os("SUMINURI_SOPS_ORACLE")
-            .map(PathBuf::from)
-            .or_else(|| find_on_path("sops"))?;
+        let sops = find_oracle()?;
         let suminuri = our_binary()?;
         let age_keygen = find_on_path("age-keygen")?;
 
@@ -202,10 +263,10 @@ fn oracle_or_skip() -> Option<Oracle> {
             let required = std::env::var("SUMINURI_DIFFERENTIAL_REQUIRE").is_ok_and(|v| v == "1");
             assert!(
                 !required,
-                "SUMINURI_DIFFERENTIAL_REQUIRE=1 but no oracle was found — need `sops` and `age-keygen` on PATH (or SUMINURI_SOPS_ORACLE) and a built `suminuri` binary"
+                "SUMINURI_DIFFERENTIAL_REQUIRE=1 but no USABLE oracle was found.\n\nNeed a real upstream sops plus age-keygen. Candidates are tried in order:\n  $SUMINURI_SOPS_ORACLE, then `sops-upstream`, then `sops`\nand any candidate whose --version says `suminuri` is REFUSED — comparing the\nimplementation against itself is not a differential. On a fleet node where the\noverlay has rebound `sops`, use `sops-upstream`."
             );
             println!(
-                "0 comparisons made: no sops/age-keygen oracle available (this is a SKIP, not a pass)"
+                "0 comparisons made: no usable upstream oracle (a candidate identifying as suminuri is refused). This is a SKIP, not a pass."
             );
             None
         }
