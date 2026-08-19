@@ -769,9 +769,26 @@ fn set_or_unset(
             path: path.display().to_string(),
             reason: e.to_string(),
         })?;
+    // ★ SAY WHAT CHANGED, NOT HOW MANY LEAVES THE ENCRYPTER VISITED.
+    //
+    // `stats.encrypted` is every leaf, because `f.encrypt` walks the whole tree —
+    // and on a real fleet file that is 273. Reporting "re-encrypted 273 leaf/leaves"
+    // after writing ONE key reads as mass churn and invites the operator to go
+    // looking for a problem that is not there: the IV stash means the other 272 come
+    // out byte-identical, which is the property `set` is built on. Verified on
+    // nix/secrets.yaml (1381 lines): after a one-key `set`, the decrypted remainder
+    // hashes identically to the original.
+    // The arithmetic differs by verb and the off-by-one is easy to get wrong: after a
+    // `set` the written leaf is still IN the tree, so `encrypted` counts it and the
+    // others are `encrypted - 1`. After an `unset` the removed leaf is already gone,
+    // so every leaf `encrypted` counted is an untouched one.
+    let (touched, others) = if remove {
+        ("removed", stats.encrypted)
+    } else {
+        ("wrote", stats.encrypted.saturating_sub(1))
+    };
     Ok(Outcome::ok_with(format!(
-        "{verb} {path_expr}: re-encrypted {} leaf/leaves",
-        stats.encrypted
+        "{touched} {path_expr}; {others} other leaf/leaves unchanged"
     )))
 }
 
