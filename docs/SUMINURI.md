@@ -109,6 +109,34 @@ Both differential tests print their own denominator and say **"this is a SKIP, n
 a pass"** when no oracle is available; `SUMINURI_DIFFERENTIAL_REQUIRE=1` and
 `SUMINURI_PARITY_REQUIRE=1` turn a skip into a failure.
 
+### The bug the tests did not have, found on the live machine
+
+The `edit` path decrypts to a scratch file so an editor can open it. The first
+version created that file 0600 in a 0700 directory, said **"removed afterwards"** in
+a comment, and removed nothing.
+
+Measured on cid 2026-08-19, after the operator's rebuild: **92 leftover scratch
+directories, three of them holding a fully decrypted copy of
+`users/drzzln/secrets.yaml`** (4842 bytes each, plaintext). They were removed
+immediately.
+
+Why a cleanup line at the end of the function was wrong *by construction*: `edit`
+has four exits and only one reaches the end — the early `return Ok(unchanged())` for
+exit 200, and the `?` on either the re-encrypt or the write-back. So the fix is a
+`Drop` guard, plus `Environment::shred_dir` (zero the bytes, then remove the
+directory) on the seam where the side effect belongs.
+
+Three tests now cover the three exits, and the guard's own red run names the first
+one it hits: `unchanged path left the scratch behind`. Verified with the real
+binary against the operator's real file too — 0 scratch directories after an edit on
+each of the unchanged, changed and error paths.
+
+The residual honesty: zeroing before unlink is **best-effort**. On APFS a write need
+not touch the blocks the old contents occupied, and SSD wear levelling can retain
+them anyway. It raises the cost of casual recovery; it is not erasure. The real
+mitigation is never writing plaintext to a disk, which needs a memory-backed scratch
+mount — `pending-suminuri: memory-backed edit buffer`.
+
 ### The gate's own red runs
 
 A differential that has never been *seen to fail* is a claim about a test, not about
@@ -175,7 +203,8 @@ ceiling**, because that is exactly where "we replaced sops" gets rounded up from
 | `set` / `unset` / `groups` / `exec-env` / `exec-file` / `publish` / `keyservice` / `completion` | **NOT IMPLEMENTED** — refused by name | only-mitigated (C6) |
 | json / dotenv / ini / binary stores | **NOT IMPLEMENTED** — YAML only | only-mitigated (C6) |
 | comment round-trip | **NOT IMPLEMENTED** — refused, never silently dropped | only-mitigated (C6) |
-| plaintext never touching a disk during `edit` | 0600 in a 0700 dir, removed after | only-mitigated (C4: darwin has no per-user tmpfs to prefer; plaintext does briefly reach a disk) |
+| plaintext never touching a disk during `edit` | 0600 in a 0700 dir, zeroed then removed by a `Drop` guard | only-mitigated (C4: darwin has no per-user tmpfs to prefer; plaintext does briefly reach a disk, and on a copy-on-write filesystem the overwrite is best-effort rather than erasure) |
+| the `edit` scratch surviving the run | NET-NEW: a `Drop` guard, so all four exits shred — not a statement at the end of the function | parse-time-rejected *for the accidental case*: three of the four exits skip a trailing statement, and the guard cannot be skipped without deleting it |
 | Front 1 — PATH-resolved `exec` (21 sites) | overlay + alias | **DESIGN** — not wired |
 | Front 2 — store-path/token sites (9) | same overlay | **DESIGN** — not wired |
 | Front 3 — `sops-install-secrets` (337 declarations × 18 nodes) | drop-in at sops-nix's existing `sops.package` seam | **DESIGN** — the seam is measured and plumbed; the replacement binary is not written |

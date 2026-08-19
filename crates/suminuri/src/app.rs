@@ -293,19 +293,52 @@ fn encrypt(
     }
 }
 
+/// Shreds the `edit` scratch directory on every exit path, including the early
+/// `return` and any `?`.
+///
+/// A `Drop` impl rather than a call at the end of the function, because `edit` has
+/// four exits and only one of them reaches the end.
+struct ScratchGuard<'e> {
+    env: &'e dyn Environment,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for ScratchGuard<'_> {
+    fn drop(&mut self) {
+        // Errors swallowed deliberately: this also runs during unwinding, and a
+        // panic in `drop` while already panicking aborts the process. That the
+        // shred happened is asserted by a test, not by a log line here.
+        let _ = self.env.shred_dir(&self.dir);
+    }
+}
+
 fn edit(inv: &Invocation, env: &dyn Environment) -> Result<Outcome, AppError> {
     let path = file_of(inv)?;
     let (mut f, key, mut stash) = open(inv, env)?;
     let before = f.render_plain()?;
 
     // The plaintext has to reach a filesystem for an editor to open it. That is a
-    // real exposure and it is graded as such: 0600 in a 0700 directory, removed
-    // afterwards, but a *disk* nonetheless on darwin where there is no per-user
-    // tmpfs to prefer. only-mitigated, not unrepresentable.
+    // real exposure: 0600 in a 0700 directory, shredded afterwards, but a *disk*
+    // nonetheless on darwin where there is no per-user tmpfs to prefer.
+    // only-mitigated, not unrepresentable.
+    //
+    // ★ "SHREDDED AFTERWARDS" IS A `Drop` GUARD, NOT A LINE AT THE END.
+    //
+    // The first version of this function said "removed afterwards" in a comment
+    // and removed nothing. Measured on cid 2026-08-19: **92 leftover scratch
+    // directories, 3 holding a fully decrypted copy of the operator's
+    // `users/drzzln/secrets.yaml`.** Three of the four exits below skip any
+    // trailing cleanup — the early `return Ok(unchanged())`, and either `?` on the
+    // re-encrypt or on the write-back — so a cleanup statement at the end of the
+    // function is wrong by construction, not by oversight.
     let dir = env.secure_temp_dir().map_err(|e| AppError::Io {
         path: "<secure temp dir>".to_string(),
         reason: e.to_string(),
     })?;
+    let _scratch_guard = ScratchGuard {
+        env,
+        dir: dir.clone(),
+    };
     let scratch = dir.join(path.file_name().map_or_else(
         || std::ffi::OsString::from("edit.yaml"),
         std::ffi::OsStr::to_os_string,
@@ -838,6 +871,67 @@ mod tests {
         let env3 = w.env(&[("/repo/after.yaml", &after)]);
         let (_, plain) = run_capture(&["-d", "/repo/after.yaml"], &env3).expect("decrypt");
         assert_eq!(plain, "alpha: CHANGED\ncount: 3\nenabled: true\n");
+    }
+
+    /// The scratch directory `edit` decrypts into must be gone afterwards — on
+    /// **every** exit path, not just the successful one.
+    ///
+    /// This is the test that was missing. Without it the code said "removed
+    /// afterwards" in a comment and removed nothing, and the evidence was 92
+    /// leftover directories on the operator's machine with three fully decrypted
+    /// copies of a real fleet secret among them.
+    #[test]
+    fn the_edit_scratch_is_shredded_on_every_exit_path() {
+        let w = World::new();
+        let (_, encrypted) =
+            run_capture(&["-e", "/repo/plain.yaml"], &w.seeded()).expect("encrypt");
+
+        // 1. The unchanged path — an early `return Ok(unchanged())`.
+        let quiet = w.env(&[("/repo/enc.yaml", &encrypted)]);
+        let (o, _) = run_capture(&["/repo/enc.yaml"], &quiet).expect("edit");
+        assert_eq!(o.code, exit::FILE_HAS_NOT_CHANGED);
+        assert!(
+            quiet.was_shredded("/mock-tmp"),
+            "unchanged path left the scratch behind"
+        );
+        assert!(
+            quiet.file("/mock-tmp/enc.yaml").is_none(),
+            "the plaintext scratch file survived the unchanged path"
+        );
+
+        // 2. The changed path — falls off the end.
+        let edited = w
+            .env(&[("/repo/enc.yaml", &encrypted)])
+            .with_editor_writing("alpha: CHANGED\ncount: 3\nenabled: true\n", true);
+        let (o, _) = run_capture(&["/repo/enc.yaml"], &edited).expect("edit");
+        assert_eq!(o.code, exit::OK);
+        assert!(
+            edited.was_shredded("/mock-tmp"),
+            "changed path left the scratch behind"
+        );
+        assert!(
+            edited.file("/mock-tmp/enc.yaml").is_none(),
+            "the plaintext scratch file survived the changed path"
+        );
+
+        // 3. The error path — the editor hands back something that will not parse,
+        //    so `load_plain` fails with `?` and the function never reaches its end.
+        //    This is the exit a trailing cleanup statement misses.
+        let broken = w
+            .env(&[("/repo/enc.yaml", &encrypted)])
+            .with_editor_writing("a: [unclosed\n", true);
+        assert!(
+            run_capture(&["/repo/enc.yaml"], &broken).is_err(),
+            "the fixture must actually fail to parse, or this asserts nothing"
+        );
+        assert!(
+            broken.was_shredded("/mock-tmp"),
+            "the ERROR path left the scratch behind"
+        );
+        assert!(
+            broken.file("/mock-tmp/enc.yaml").is_none(),
+            "the plaintext scratch file survived the error path"
+        );
     }
 
     #[test]
