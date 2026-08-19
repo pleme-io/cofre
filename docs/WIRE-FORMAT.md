@@ -465,3 +465,93 @@ Kustomizations to a rendered Secret or an ESO `ExternalSecret` — which is a
 fleet-architecture decision, not a parity one.
 
 Any claim that "sops is replaced" while front 4 stands is a round-up.
+
+---
+
+## Multi-document streams: ONE data key, ONE MAC
+
+**Measured 2026-08-19. This is not what the file's shape suggests, and the obvious
+reading is wrong.**
+
+A multi-document sops file carries a *complete* `sops:` block per document — its own
+`age:` list with its own armored `enc` blob, its own `lastmodified`, its own `mac:`
+line. Every instinct says N independent encrypted files sharing a byte stream.
+
+They are copies. On
+`pleme-io/k8s/clusters/plo/infrastructure/business-intelligence/postgres-superset.yaml`
+(5 documents, 4 `---` separators):
+
+| observation | count |
+|---|---|
+| distinct `mac:` ciphertexts | **1** (all five byte-identical) |
+| distinct `lastmodified` values | **1** |
+| `sops:` blocks | 5 |
+
+Identical GCM ciphertext is the proof, not a coincidence: it requires the same key,
+the same IV **and** the same plaintext. And the `mac:` field's AAD is the verbatim
+`lastmodified`, so identical ciphertext already forces identical timestamps.
+
+The independent confirmation is upstream's own error when a document is extracted
+from the middle of the stream and decrypted alone:
+
+```
+MAC mismatch. File has C516636B7988F430…, computed CF83E1357EEFB8BD…
+```
+
+`CF83E1357EEFB8BDF1542850D66D8007D620E4050B5715DC83F4A921D36CE9CE…` is the SHA-512
+of the **empty string** — that document is two comments and an empty mapping, so on
+its own it MACs to nothing, while the file's recorded MAC covers the whole stream.
+
+### Consequences
+
+1. **The MAC covers every document's leaves, in document order**, with one
+   accumulator. `SopsFile::decrypt_stream` does exactly that.
+2. **A document cannot be verified alone.** Splitting a stream on `---` and
+   decrypting a piece fails in BOTH implementations. That is not a suminuri bug, and
+   chasing it as one cost a diagnosis cycle — if you find yourself splitting a stream
+   to isolate a MAC failure, stop.
+3. **The data key comes from the first document's metadata**, because every block
+   holds the same one. A per-document key would be a different file format.
+4. **An empty document in a stream is legitimate.** It has no MAC-eligible leaf, so
+   the walk feeds nothing — which must not be reported as a MAC mismatch. See
+   `WireError::NothingToVerify`.
+
+## Comments
+
+**Comments do NOT contribute to the MAC, in either direction.** sops guards its
+`hash.Write` with `if !ok` in both walkers. Verified from the outside: alter one
+character of a comment in a real encrypted file, leave every byte of ciphertext
+intact, and upstream still decrypts it.
+
+An encrypted comment is a leaf like any other, rendered as a `#`-prefixed envelope
+with `type:comment`:
+
+```
+    #ENC[AES256_GCM,data:...,iv:...,tag:...,type:comment]
+```
+
+Its AAD is the enclosing mapping's path — which is why a comment must be attached to
+the right collection. Hoisting one to the root changes its AAD, the GCM tag then
+fails, and because the decrypt path is deliberately forgiving ("assume it was not
+encrypted in the first place") the failure surfaces as **raw ciphertext in the
+output**, not as an error.
+
+**On DECRYPT the file is the authority, not the selector.** A `type:comment` leaf is a
+record of what was done; a policy that has since changed cannot un-encrypt bytes
+already on disk. Gating decrypt on the selector makes any file whose
+`encrypted_regex` later moved permanently unreadable while upstream reads it fine.
+
+## Emitter facts that only a byte comparison finds
+
+| fact | why it is not guessable |
+|---|---|
+| non-BMP characters are escaped `\UXXXXXXXX` in double quotes; BMP ones are not | libyaml's `IS_PRINTABLE` enumerates first bytes `0x20..=0x7E` and `0xC2..=0xEF`, omitting `0xF0..=0xF4`. One real file holds both a BMP check mark (literal) and a non-BMP wrench (escaped) |
+| `-`, `?`, `:` are indicators only when followed by whitespace | `-U` is a valid plain scalar; over-quoting yields `- "-U"` where go-yaml writes `- -U` |
+| a block scalar inside a `- ` item indents at `dash + 2` | go-yaml's `increase_indent_compact` takes the sequence branch, not `best * ((cur + best) / best)` — 30 vs 32 at dash-28 |
+| a mapping holding only comments still emits `{}` | comments do not give a block mapping a key, so it is still the empty mapping |
+| a YAML `null` is not a leaf at all | sops's `walkValue` has `case nil: return nil, nil`, returning before `onLeaves` where both cipher and MAC live. A quoted `"null"` IS a leaf — style is part of the test |
+| a block scalar can open as a bare sequence entry (`- \|`) | a comment scanner that only looks after a `:` misses it and duplicates every `#` line of the body |
+
+**Every row above was a byte difference against a real fleet file, and none was
+reachable from a hand-written fixture.** The gate is
+`crates/suminuri/tests/corpus_differential.rs`; run it before changing anything here.
