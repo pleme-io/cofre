@@ -109,6 +109,39 @@ Both differential tests print their own denominator and say **"this is a SKIP, n
 a pass"** when no oracle is available; `SUMINURI_DIFFERENTIAL_REQUIRE=1` and
 `SUMINURI_PARITY_REQUIRE=1` turn a skip into a failure.
 
+### The alias made the gate vacuous, and the gate did not notice
+
+The worst finding of the lot, because it invalidates evidence rather than code.
+
+`sops_differential` found its oracle with `find_on_path("sops")`. That was correct
+until the fleet overlay made `sops` resolve to **suminuri** — after which the file
+compared suminuri against suminuri and every assertion held trivially. Measured on
+cid 2026-08-19: a full **289-test run passed with `sops --version` printing
+`suminuri 0.1.8`**. Nothing failed, nothing warned; a self-referential oracle is
+silent by construction.
+
+So the gate now checks the *identity* of its oracle instead of assuming it:
+
+| candidate | order | if it identifies as suminuri |
+|---|---|---|
+| `$SUMINURI_SOPS_ORACLE` | first, honoured strictly | **hard error** — naming an oracle and getting us is worth shouting about, and silently substituting another binary would report green about a comparison nobody asked for |
+| `sops-upstream` | second | skipped |
+| `sops` | third | skipped — a rebound `sops` is the expected state on a fleet node, not an operator error |
+
+That is the positive control this gate never had. Its own red run: pointing
+`SUMINURI_SOPS_ORACLE` at the live `sops` now fails with *"identifies as suminuri
+… that is the implementation under test, not an oracle"*. The first version of the
+fix fell through to a good oracle instead of erroring, so **its red run came out
+green** — which is the same class of bug one level up, and is why the explicit path
+is strict.
+
+Parity was then re-established against the real upstream (`sops-upstream`, picked
+automatically): 9 tests, 24 comparisons, green.
+
+**The general rule this earns:** an oracle reached by *name* stops being an oracle
+the moment you take that name over. Any differential whose reference is resolved
+from the environment needs to assert what it actually found.
+
 ### The bug the tests did not have, found on the live machine
 
 The `edit` path decrypts to a scratch file so an editor can open it. The first
