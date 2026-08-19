@@ -1359,6 +1359,46 @@ mod tests {
         ));
     }
 
+    /// ★ REGRESSION: a non-mapping root was SILENT PERMANENT DATA LOSS.
+    ///
+    /// `render()` appends the `sops:` block under `if let Value::Mapping(items)` with
+    /// no else arm, so a sequence- or scalar-root document used to encrypt with exit
+    /// 0, emit plausible bytes, and decrypt back to NOTHING. Measured on the shipped
+    /// 0.1.10 binary: a 3-entry sequence produced 346 bytes whose decrypt was empty.
+    /// With `--in-place` that destroyed the file and reported success.
+    ///
+    /// Both non-mapping shapes are covered because they take different match arms,
+    /// and the mapping case is asserted in the same test so the guard cannot be
+    /// "fixed" by refusing everything.
+    #[test]
+    fn a_non_mapping_root_is_refused_rather_than_silently_emptied() {
+        let w = World::new();
+        for (src, want) in [("- one\n- two\n", "sequence"), ("bare-string\n", "scalar")] {
+            let env = w.env(&[("/repo/odd.yaml", src)]);
+            let err = run_capture(&["-e", "/repo/odd.yaml"], &env)
+                .expect_err("a non-mapping root must be refused");
+            match &err {
+                AppError::File(FileError::NonMappingRoot { found }) => {
+                    assert_eq!(*found, want, "wrong shape named for {src:?}");
+                }
+                other => panic!("expected NonMappingRoot for {src:?}, got {other:?}"),
+            }
+            // The message has to name the reason, not just fail: an operator hitting
+            // this needs to know the format requires a mapping.
+            let msg = err.to_string();
+            assert!(
+                msg.contains("mapping"),
+                "message must name the cause: {msg}"
+            );
+        }
+
+        // The guard must not have become "refuse everything".
+        let (outcome, body) = run_capture(&["-e", "/repo/plain.yaml"], &w.seeded())
+            .expect("a mapping still encrypts");
+        assert_eq!(outcome.code, exit::OK);
+        assert!(body.contains("ENC[AES256_GCM,"));
+    }
+
     #[test]
     fn set_is_no_longer_an_unimplemented_verb() {
         // The regression this whole verb exists to fix: `sops set` was refused, and
