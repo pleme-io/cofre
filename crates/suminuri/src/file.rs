@@ -43,6 +43,10 @@ pub enum FileError {
         "`key_groups` / Shamir secret sharing is not implemented; refusing rather than rewriting the file without it"
     )]
     KeyGroupsUnsupported,
+    #[error(
+        "this document's root is a {found}, and the sops format requires a mapping — there is nowhere to put the `sops:` metadata key. Refusing rather than writing a file that decrypts to nothing."
+    )]
+    NonMappingRoot { found: &'static str },
 }
 
 /// A loaded file, split into the data tree and its metadata.
@@ -167,6 +171,40 @@ impl SopsFile {
         stash: &mut IvStash,
         now: &str,
     ) -> Result<WalkStats, FileError> {
+        // ★ REFUSE A NON-MAPPING ROOT HERE, BEFORE ANY WORK — THIS WAS SILENT
+        // PERMANENT DATA LOSS.
+        //
+        // `render()` appends the `sops:` block under `if let Value::Mapping(items)`
+        // with **no else arm**, so a sequence- or scalar-root document rendered with
+        // no metadata at all. Measured 2026-08-19 on the shipped 0.1.10 binary:
+        //
+        //     printf -- '- one\n- two\n- three\n' > seq.yaml
+        //     suminuri --encrypt --age <r> seq.yaml   # exit 0, 346 bytes out
+        //     suminuri --decrypt <that>               # EMPTY
+        //
+        // Exit 0, plausible output, contents gone. With `--in-place` that destroys
+        // the file and reports success — the worst failure available to this tool,
+        // and strictly worse than the comment refusal because nothing tells the
+        // operator.
+        //
+        // The guard belongs in `encrypt` rather than in `render`: this is the one
+        // function every write path funnels through (`encrypt`, `edit`, `rotate`,
+        // `set`, `unset`), and refusing before the walk means no plaintext is
+        // touched. `render` keeps its `if let` because by then the shape is proven.
+        //
+        // sops itself accepts these documents — it wraps a non-mapping root in its
+        // own `data:` key. Reproducing that is a real feature, not a bug fix, and it
+        // would change the wire shape we emit; until it exists, a refusal that names
+        // the reason is the honest state. `pending-suminuri: non-mapping document
+        // roots (sops wraps them in `data:`)`.
+        match &self.tree {
+            Value::Mapping(_) => {}
+            Value::Sequence(_) => {
+                return Err(FileError::NonMappingRoot { found: "sequence" });
+            }
+            Value::Scalar(_) => return Err(FileError::NonMappingRoot { found: "scalar" }),
+        }
+
         let selector = self.metadata.selector()?;
         let mut mac = MacAccumulator::new(self.metadata.mac_only_encrypted);
         let mut ctx = WalkCtx {
