@@ -224,18 +224,24 @@ ceiling**, because that is exactly where "we replaced sops" gets rounded up from
 | a rekey to an empty recipient set | NET-NEW: `rewrap` refuses | truly-unrep |
 | a silently-ignored unsupported flag | NET-NEW: closed flag catalog, refusal before the file is read | parse-time-rejected |
 | a dropped recipient for a provider we cannot unwrap | NET-NEW: opaque `WrappedKey` round-trip | parse-time-rejected |
-| a YAML document whose comments would be silently stripped | NET-NEW: refused with its line number | parse-time-rejected |
+| a whole-line comment silently stripped | NET-NEW: parsed into `Item::Comment`/`Entry::Comment` by line correlation, re-emitted in place; corpus-gated | only-mitigated (C3: 167 real files, not all YAML) |
+| a TRAILING comment (`k: v # note`) silently dropped | NET-NEW: refused with its line — sops's tree has no item for one | parse-time-rejected |
 | an invalid selector regex silently matching nothing | NET-NEW: compiled once, refused at load | parse-time-rejected |
 | a self-defeating `encrypted_comment_regex` | NET-NEW: refused, as upstream does | parse-time-rejected |
 | encrypting with no recipients at all | NET-NEW: refused | parse-time-rejected |
 | the `ENC[]` envelope, MAC, AAD, selectors | NET-NEW typed border, differential-gated both directions | only-mitigated (C3: a differential over a finite corpus; no proof over all inputs) |
-| go-yaml byte-exact emission | NET-NEW emitter, gated against sops-written fixtures + 3 real files | only-mitigated (C3: same ceiling — 10 files, not all YAML) |
+| go-yaml byte-exact emission | NET-NEW emitter, gated against sops-written fixtures + **167 real fleet files**, byte-compared both directions | only-mitigated (C3: 167 files with a required floor, not a proof over all YAML) |
 | age wrap/unwrap | SHIPPED-composition: the `age` crate behind our own identity discovery | only-mitigated (C3: the wire is a third party's) |
 | PGP / AWS KMS / GCP KMS / HuaweiCloud KMS / Azure KV / Vault transit | **NOT IMPLEMENTED** — named refusal; keys round-trip | only-mitigated (C6: a refusal, not a capability) |
 | key groups + Shamir | **NOT IMPLEMENTED** — refused rather than rewritten without them | only-mitigated (C6) |
-| `set` / `unset` / `groups` / `exec-env` / `exec-file` / `publish` / `keyservice` / `completion` | **NOT IMPLEMENTED** — refused by name | only-mitigated (C6) |
+| `set` / `unset` | SHIPPED: `edit`'s flow with a programmatic mutation, sharing the IV stash so untouched leaves stay byte-identical; values are the JSON SCALAR subset, composites refused by name | only-mitigated (C3: differential-gated against upstream both directions) |
+| `groups` / `exec-env` / `exec-file` / `publish` / `keyservice` / `completion` | **NOT IMPLEMENTED** — refused by name. Measured 2026-08-19: none appears anywhere in the fleet | only-mitigated (C6: a refusal, not a capability) |
 | json / dotenv / ini / binary stores | **NOT IMPLEMENTED** — YAML only | only-mitigated (C6) |
-| comment round-trip | **NOT IMPLEMENTED** — refused, never silently dropped | only-mitigated (C6) |
+| multi-document READ | SHIPPED: one shared MAC accumulator across all documents, because a stream has ONE data key and ONE MAC (all `mac:` fields are byte-identical ciphertext) | only-mitigated (C3: corpus-gated) |
+| multi-document WRITE (`edit`/`rotate`/`--extract`) | **NOT IMPLEMENTED** — refused by name; each would have to invent a rule for which document | only-mitigated (C6) |
+| a non-mapping document root emitting a file that decrypts to nothing | NET-NEW: refused in `SopsFile::encrypt`, before the walk, so no plaintext is touched | parse-time-rejected |
+| a YAML `null` in an encrypted region reaching the cipher or the MAC | NET-NEW: skipped in both directions, matching sops's `case nil`; style-aware so a quoted `"null"` is still a leaf | parse-time-rejected |
+| a MAC check that proves nothing reported as a MISMATCH | NET-NEW: `NothingToVerify` is its own error; the empty-document path still verifies the MAC field's seal | parse-time-rejected |
 | plaintext never touching a disk during `edit` | 0600 in a 0700 dir, zeroed then removed by a `Drop` guard | only-mitigated (C4: darwin has no per-user tmpfs to prefer; plaintext does briefly reach a disk, and on a copy-on-write filesystem the overwrite is best-effort rather than erasure) |
 | the `edit` scratch surviving the run | NET-NEW: a `Drop` guard, so all four exits shred — not a statement at the end of the function | parse-time-rejected *for the accidental case*: three of the four exits skip a trailing statement, and the guard cannot be skipped without deleting it |
 | Front 1 — PATH-resolved `exec` (21 sites) | overlay + alias | **DESIGN** — not wired |
