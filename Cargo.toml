@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT OR Apache-2.0"
@@ -30,13 +30,13 @@ module_name_repetitions = "allow"
 
 [workspace.dependencies]
 # Workspace crates
-cofre-types = { path = "crates/cofre-types", version = "0.1.8" }
+cofre-types = { path = "crates/cofre-types", version = "0.1.9" }
 # The suminuri (墨塗り) crates. Declared here rather than per-member so the
 # auto-release version rewrite reaches them the same way it reaches cofre-types —
 # a hardcoded version in a member manifest goes stale on the next workspace bump
 # and then fails to resolve, far from the edit that caused it.
-suminuri-wire = { path = "crates/suminuri-wire", version = "0.1.8" }
-suminuri-yaml = { path = "crates/suminuri-yaml", version = "0.1.8" }
+suminuri-wire = { path = "crates/suminuri-wire", version = "0.1.9" }
+suminuri-yaml = { path = "crates/suminuri-yaml", version = "0.1.9" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
