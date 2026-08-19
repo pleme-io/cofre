@@ -368,10 +368,33 @@ pub fn plain_is_structurally_unsafe(v: &str) -> bool {
     if v.is_empty() {
         return true;
     }
-    v.starts_with([
-        '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@',
-        '`',
-    ]) || v.starts_with(' ')
+    // ★ `-`, `?` and `:` ARE INDICATORS ONLY WHEN FOLLOWED BY WHITESPACE.
+    //
+    // libyaml's `yaml_emitter_analyze_scalar` sets `block_indicators` for these
+    // three only in the `followed_by_whitespace` branch — `- ` opens a sequence
+    // entry, but `-U` is an ordinary plain scalar. Treating a bare leading `-` as
+    // unsafe made us DOUBLE-QUOTE where go-yaml emits plain, which the real corpus
+    // caught: a postgres probe's argv rendered `- "-U"` against upstream's `- -U`
+    // in `clusters/plo/.../postgres-superset.yaml`. Six lines, one file, and the
+    // only reason it was found is that the differential compares bytes.
+    //
+    // The other characters below are unconditional indicators, so their leading
+    // position alone is disqualifying. Only the block-context rule is modelled
+    // because every scalar this crate emits is in block context.
+    let leading_indicator = match v.chars().next() {
+        Some(c @ ('-' | '?' | ':')) => {
+            let rest = &v[c.len_utf8()..];
+            rest.is_empty() || rest.starts_with([' ', '\t'])
+        }
+        Some(
+            ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%'
+            | '@' | '`',
+        ) => true,
+        _ => false,
+    };
+
+    leading_indicator
+        || v.starts_with(' ')
         || v.ends_with(' ')
         || v.contains(": ")
         || v.contains(" #")

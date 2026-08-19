@@ -76,6 +76,10 @@ impl std::fmt::Debug for SopsFile {
 
 impl SopsFile {
     /// Load an already-encrypted file.
+    ///
+    /// Single-document only. Every WRITE path funnels through here, and that is
+    /// deliberate — see [`Self::load_encrypted_stream`] for why the read path is
+    /// the one that grew multi-document support.
     pub fn load_encrypted(src: &str) -> Result<Self, FileError> {
         let doc = suminuri_yaml::parse(src)?;
         if doc.roots.len() != 1 {
@@ -83,11 +87,53 @@ impl SopsFile {
                 docs: doc.roots.len(),
             });
         }
-        let mut tree = doc
+        let indent = detect_indent(src).unwrap_or(4);
+        let root = doc
             .roots
             .into_iter()
             .next()
             .unwrap_or(Value::Mapping(Vec::new()));
+        Self::from_root(root, indent)
+    }
+
+    /// Load every document in a stream, each with its own metadata.
+    ///
+    /// ★ WHY THE READ PATH IS MULTI-DOCUMENT AND THE WRITE PATH IS NOT.
+    ///
+    /// A multi-document sops file carries a complete `sops:` block per document —
+    /// 5 blocks and 4 `---` separators in
+    /// `clusters/plo/infrastructure/business-intelligence/postgres-superset.yaml`.
+    /// It is tempting to read that as N independent files, and the first version of
+    /// this comment did say so. **It is wrong**: those blocks are COPIES of one
+    /// metadata, sharing one data key and one MAC over the whole stream. The proof
+    /// and the measurement are on [`Self::decrypt_stream`], which is where the
+    /// verification has to live as a result — this function only splits the stream
+    /// into per-document trees and does not verify anything on its own.
+    ///
+    /// Reading was what "96 of 171 fleet files are unreadable" was mostly about:
+    /// 24 of the 26 refusals left after comment support were multi-document.
+    ///
+    /// WRITING is not a fold, and pretending otherwise is how a tool loses data. An
+    /// `edit` would have to re-encrypt N documents under N different data keys and
+    /// decide what a new key belongs to; a `rotate` would have to rotate N of them;
+    /// `--extract` would have to say which document a path refers to. Each of those
+    /// is a real decision with a wrong answer available, so the write verbs keep
+    /// going through [`Self::load_encrypted`] and keep refusing by name.
+    /// `pending-suminuri: multi-document write paths`.
+    pub fn load_encrypted_stream(src: &str) -> Result<Vec<Self>, FileError> {
+        let doc = suminuri_yaml::parse(src)?;
+        if doc.roots.is_empty() {
+            return Err(FileError::NotEncrypted);
+        }
+        let indent = detect_indent(src).unwrap_or(4);
+        doc.roots
+            .into_iter()
+            .map(|root| Self::from_root(root, indent))
+            .collect()
+    }
+
+    /// One document's root mapping into a `SopsFile`.
+    fn from_root(mut tree: Value, indent: usize) -> Result<Self, FileError> {
         let sops = tree.remove("sops").ok_or(FileError::NotEncrypted)?;
         // Refused rather than silently dropped: re-rendering a key-group file
         // without its groups would strip every recipient's access.
@@ -98,7 +144,7 @@ impl SopsFile {
         Ok(Self {
             tree,
             metadata,
-            indent: detect_indent(src).unwrap_or(4),
+            indent,
         })
     }
 
@@ -156,6 +202,72 @@ impl SopsFile {
             computed,
             self.metadata.mac.clone(),
             self.metadata.lastmodified.clone(),
+            fed,
+        ))
+    }
+
+    /// Decrypt a whole multi-document stream under ONE shared MAC.
+    ///
+    /// ★ THE WIRE FACT THIS ENCODES, AND IT IS NOT WHAT THE OBVIOUS MODEL SAYS.
+    ///
+    /// A multi-document sops file looks like N independent files — each document
+    /// carries its own complete `sops:` block, its own age `enc` blob, its own
+    /// `mac:` line. It is not. Measured 2026-08-19 on the fleet's
+    /// `clusters/plo/.../postgres-superset.yaml` (5 documents):
+    ///
+    ///   * all 5 `mac:` fields are **byte-identical ciphertext**,
+    ///   * all 5 `lastmodified` values are identical (that string is the mac
+    ///     field's AAD, so identical ciphertext already implies it),
+    ///   * and upstream's own error on a document extracted from the middle reads
+    ///     `File has C516636B…, computed CF83E135…`, where `CF83E135…` is the
+    ///     SHA-512 of the EMPTY STRING — document 0 is two comments and an empty
+    ///     mapping, so on its own it MACs to nothing.
+    ///
+    /// So there is one data key and **one MAC over every document's leaves in
+    /// document order**, written into each document's block. Identical mac
+    /// ciphertext is the tell: same key, same IV and same plaintext.
+    ///
+    /// The consequence worth remembering is that a document cannot be verified
+    /// alone. Splitting a stream on `---` and decrypting a piece fails in BOTH
+    /// implementations — that is not our bug, and chasing it wasted a diagnosis
+    /// cycle here. Verify the stream, or verify nothing.
+    pub fn decrypt_stream(
+        docs: &mut [Self],
+        key: &DataKey,
+        stash: &mut IvStash,
+    ) -> Result<Unverified<WalkStats>, FileError> {
+        let Some(first) = docs.first() else {
+            return Err(FileError::NotEncrypted);
+        };
+        let selector = first.metadata.selector()?;
+        let mut mac = MacAccumulator::new(first.metadata.mac_only_encrypted);
+        let mac_field = first.metadata.mac.clone();
+        let lastmodified = first.metadata.lastmodified.clone();
+
+        let mut total = WalkStats::default();
+        for f in docs.iter_mut() {
+            let mut ctx = WalkCtx {
+                direction: Direction::Decrypt,
+                key,
+                selector: &selector,
+                mac: &mut mac,
+                stash,
+                stats: WalkStats::default(),
+            };
+            let stats = walk(&mut f.tree, &mut ctx)?;
+            total.leaves += stats.leaves;
+            total.encrypted += stats.encrypted;
+            total.cleared += stats.cleared;
+            total.macced += stats.macced;
+        }
+
+        let fed = mac.leaves_fed();
+        let computed = mac.finish();
+        Ok(Unverified::new(
+            total,
+            computed,
+            mac_field,
+            lastmodified,
             fed,
         ))
     }

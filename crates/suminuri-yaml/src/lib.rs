@@ -94,13 +94,27 @@ pub enum YamlError {
     #[error("YAML emit error: {0}")]
     Emit(String),
 
-    /// The document contains comments, which this crate will not silently drop.
+    /// A comment shares a line with content (`key: value # note`).
     ///
-    /// See the crate docs: comments are *tree items* in sops's model, so losing
-    /// them changes the file's MAC as well as its text.
+    /// Whole-line comments round-trip as tree items. A TRAILING one has no item in
+    /// sops's model — the store's comment is a whole line — so neither
+    /// implementation can carry it, and dropping it silently is the failure this
+    /// refusal exists to prevent. Measured 2026-08-19: zero of the fleet's 171
+    /// encrypted files carry one.
     #[error(
-        "line {line}: this document contains comments, and suminuri-yaml will not silently drop them (they are part of the MAC). Use upstream sops for this file, or open the comment-round-trip gap."
+        "line {line}: a comment shares this line with content. sops's tree models a comment LINE and has no item for a trailing one, so it cannot round-trip; refusing rather than dropping it. Move it to its own line."
     )]
+    TrailingCommentUnsupported { line: u64 },
+
+    /// Retained so a hand-built tree that reaches the emitter with a shape it
+    /// cannot place still fails by name rather than losing the comment.
+    ///
+    /// **This no longer means "commented documents are unsupported".** It did until
+    /// 2026-08-19, on the stated grounds that comments "are part of the MAC" —
+    /// which was false, and contradicted by this crate's own sibling
+    /// (`suminuri::walk::visit_comment`: *"A comment never contributes to the MAC,
+    /// in either direction"*). That refusal was blocking 96 of 171 fleet files.
+    #[error("line {line}: a comment appears where this emitter cannot place one")]
     CommentsUnsupported { line: u64 },
 
     /// A mapping key was not a scalar string. sops requires string keys.

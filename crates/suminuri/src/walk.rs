@@ -182,12 +182,33 @@ fn visit_comment(
     }
     // A comment never contributes to the MAC, in either direction — the
     // `if !ok` guard around `hash.Write` in both of sops's walkers.
-    if !selection.is_encrypted() {
-        return Ok(());
-    }
+    //
+    // ★ THE SELECTOR GATES ENCRYPT ONLY, AND THE ASYMMETRY IS THE WHOLE POINT.
+    //
+    // This guard used to sit here, above the `match`, so it skipped DECRYPT too.
+    // Measured 2026-08-19 against the fleet's real corpus: four k8s files came back
+    // with `#ENC[AES256_GCM,…,type:comment]` where upstream sops returned the
+    // plaintext, because those comments sit at a path the selector calls clear —
+    // so we refused to decrypt a comment the file plainly says is encrypted.
+    //
+    // The two directions ask different questions. On ENCRYPT the selector is the
+    // authority: it is a policy decision about what *should* be protected, and a
+    // comment outside the encrypted region must stay readable. On DECRYPT the FILE
+    // is the authority: a `type:comment` leaf is a fact about what was done, and a
+    // policy that has since changed cannot un-encrypt bytes already on disk. Gating
+    // decrypt on the selector makes any file whose rules moved permanently
+    // unreadable by us while upstream reads it fine.
+    //
+    // Decrypting unconditionally is safe rather than lax: `EncryptedLeaf::parse`
+    // only matches a real `ENC[AES256_GCM,…]` envelope, and `decrypt_leaf` verifies
+    // the GCM tag against the AAD, so a plain comment that merely looks unusual
+    // cannot be mangled — it falls through and keeps its text.
     let aad = path.aad();
     match ctx.direction {
         Direction::Encrypt => {
+            if !selection.is_encrypted() {
+                return Ok(());
+            }
             let pt = Plaintext::comment(body.clone());
             let iv = ctx.stash.recall(&pt, &aad);
             if let Some(leaf) = encrypt_leaf(ctx.key, &pt, &aad, iv)? {
@@ -225,6 +246,33 @@ fn visit_scalar(
     let Value::Scalar(scalar) = value else {
         return Ok(());
     };
+
+    // ★ A YAML NULL IS NOT A LEAF, IN EITHER DIRECTION.
+    //
+    // sops's `walkValue` has `case nil: return nil, nil` — a nil returns before
+    // reaching `onLeaves`, which is where both the cipher and the MAC live. So a
+    // null is touched by neither, and it is not counted.
+    //
+    // Missing this made one real fleet file unreadable:
+    // `operators/nexus-monitor/k8s/github-credentials.yaml` has
+    // `password: null` inside `stringData`, which its `encrypted_regex` selects —
+    // so we tried to parse `null` as an `ENC[…]` envelope and failed with "value is
+    // not a suminuri/sops encrypted leaf" on a file upstream reads fine.
+    //
+    // STYLE IS PART OF THE TEST. A plain `null` is the YAML null; a quoted
+    // `"null"` is the four-character string and IS a leaf. Ignoring the style here
+    // would silently stop encrypting any secret whose value happens to be the text
+    // "null" — a far worse bug than the one being fixed.
+    // ★ RED-RUN 2026-08-19: replacing this condition with `false` turns the corpus
+    // gate red on exactly two files — `git-ssh-secret.yaml` and
+    // `github-credentials.yaml` — each reported as "we refused a file upstream
+    // read". Both carry a `null` inside an encrypted region.
+    if scalar.style == ScalarStyle::Plain
+        && matches!(scalar.value.as_str(), "null" | "Null" | "NULL" | "~")
+    {
+        return Ok(());
+    }
+
     let selection = ctx.selector.select(path, comments, is_comment);
     ctx.stats.leaves += 1;
     match selection {

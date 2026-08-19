@@ -102,7 +102,9 @@ impl<T> Unverified<T> {
         stash: Option<&mut IvStash>,
     ) -> Result<T, WireError> {
         if self.leaves_fed == 0 {
-            return Err(WireError::MacMismatch);
+            // Named for what it is. Reporting `MacMismatch` here sent a reader
+            // hunting for corruption in a file that was simply empty.
+            return Err(WireError::NothingToVerify);
         }
         verify_mac_field_recording(
             key,
@@ -202,11 +204,17 @@ mod tests {
 
     /// The anti-vacuity refusal. Without it, a walker that found no leaves would
     /// compute the empty digest, match another empty digest, and report success.
+    ///
+    /// The error is `NothingToVerify`, not `MacMismatch`. It reported the latter
+    /// until 2026-08-19 and that cost a real diagnosis cycle: document 0 of a
+    /// 5-document fleet file is two comments and an empty mapping, legitimately
+    /// MACs to nothing, and "MAC mismatch" sent me looking for corruption in a file
+    /// that was intact. An error naming the wrong cause is worse than a vague one.
     #[test]
     fn a_zero_leaf_verification_is_refused_as_vacuous() {
         let (u, k) = wrapped(&[], "2026-08-18T00:00:00Z");
         assert_eq!(u.leaves_fed(), 0);
-        assert_eq!(u.verify(&k), Err(WireError::MacMismatch));
+        assert_eq!(u.verify(&k), Err(WireError::NothingToVerify));
     }
 
     #[test]
