@@ -199,11 +199,24 @@ check on the parity claim — and deleting it would destroy the evidence, exactl
 keeping the zoekt shards preserved the evidence for that sunset. ★★ MODULARIZE,
 DON'T DELETE applies to the *dependency*, not only to our own code.
 
+**And "reachable" means installed.** Defining `sops-upstream` in the overlay makes
+it reachable to `nix build` and to a config edit — *not* to an operator typing the
+command. Measured on cid after the first real rebuild (2026-08-19): `sops` resolved
+to suminuri and worked, while `sops-upstream` was **absent from every profile**,
+because nothing installed it. This document claimed the rollback was on PATH and it
+was not. Two fixes: `modules/pleme/shared/suminuri.nix` installs it alongside
+`suminuri`, and the overlay renames the binary to `bin/sops-upstream` so it cannot
+collide with the `bin/sops` the substitution provides.
+
+How it hid is worth keeping: `readlink -f` on a nonexistent path echoes the path
+back rather than failing, so the first check printed a plausible store path for a
+binary that was never there. Existence checks want `[ -e ]` and a positive control.
+
 | step | change | done-predicate | rollback |
 |---|---|---|---|
 | C0 | add `cofre` as a flake input; build `suminuri` | `nix build .#suminuri` green; `nix eval .#kataFleetGate` unchanged | drop the input |
 | C1 | `pleme.suminuri.enable = false` module, declaring the overlay and the seam but flipping nothing | the module evaluates on every node with no store-path change | delete the import |
-| C2 | flip **Front 1 only** — the overlay puts `suminuri` on PATH as `sops` | `sops --version` names suminuri; `nix run .#sops-edit` round-trips a real file; every one of the 21 sites still works | one field |
+| C2 | flip **Front 1 only** — the overlay puts `suminuri` on PATH as `sops` | `sops --version` names suminuri; `sops-upstream --version` names the Go one; `nix run .#sops-edit` round-trips a real file; every one of the 21 sites still works | one field |
 | C3 | flip **Front 3, HM plane only** — `sops.package` on the user agent | that plane's generation advances; its 62 secrets + 9 templates materialize; the *system* plane is untouched and still on upstream | one field |
 | C4 | flip Front 3's system plane | both planes on suminuri; `/run/secrets.d` correct | one field per plane |
 | C5 | Front 4 — migrate the 9 Kustomizations off `decryption.provider: sops` | `rg '^\s*provider:\s*sops' k8s/` == 0 | git revert |
