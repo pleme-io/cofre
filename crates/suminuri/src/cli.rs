@@ -47,6 +47,10 @@ pub enum Verb {
     Rotate,
     UpdateKeys,
     FileStatus,
+    /// `set <file> <path> <value>` — write one leaf without opening an editor.
+    Set,
+    /// `unset <file> <path>` — remove one leaf.
+    Unset,
     Version,
     Help,
     /// A verb sops has that this build does not serve. Carries the name so the
@@ -66,6 +70,12 @@ pub struct Invocation {
     /// `--age` / `-a`, split on commas.
     pub age_recipients: Vec<String>,
     pub extract: Option<String>,
+    /// `set`/`unset`'s bracket path — the same syntax `--extract` takes, parsed by
+    /// the same function. Three verbs now share one parser; a second copy of that
+    /// grammar is how `["a"]["b"]` starts meaning two different things.
+    pub path_expr: Option<String>,
+    /// `set`'s value argument, as written on the command line (sops takes JSON).
+    pub value_expr: Option<String>,
     pub input_type: Option<String>,
     pub output_type: Option<String>,
     pub mac_only_encrypted: bool,
@@ -94,6 +104,8 @@ impl Default for Invocation {
             indent: None,
             age_recipients: Vec::new(),
             extract: None,
+            path_expr: None,
+            value_expr: None,
             input_type: None,
             output_type: None,
             mac_only_encrypted: false,
@@ -166,9 +178,18 @@ const UNSUPPORTED_WITH_VALUE: &[&str] = &[
 const UNSUPPORTED_FLAGS: &[&str] = &["--show-master-keys", "-s", "--enable-local-keyservice"];
 
 /// Verbs sops has that this build does not serve.
+///
+/// `set` and `unset` LEFT this list on 2026-08-19, and the reason is worth keeping:
+/// they were the only refused verbs the fleet actually *used*. Measured across the
+/// nix repo (2755 files, denominator stated because a bare `grep -r` from the org
+/// root reads zero and reports "no matches"): `set` appeared in 5 places — one live
+/// caller (`tools/init-akeyless-dev.tlisp`, which invokes it and `die`s on failure)
+/// and two operator-facing docs. The other six refused verbs appeared **nowhere**.
+///
+/// So aliasing `sops` to this binary broke exactly one real workflow, loudly. That
+/// is the gap this closes, and the list below is now genuinely unused by the fleet
+/// rather than merely unimplemented.
 const UNSUPPORTED_VERBS: &[&str] = &[
-    "set",
-    "unset",
     "groups",
     "exec-env",
     "exec-file",
@@ -195,6 +216,8 @@ pub fn parse(args: &[String]) -> Result<Invocation, ParseError> {
                 "rotate" => Some(Verb::Rotate),
                 "updatekeys" => Some(Verb::UpdateKeys),
                 "filestatus" => Some(Verb::FileStatus),
+                "set" => Some(Verb::Set),
+                "unset" => Some(Verb::Unset),
                 "help" | "h" => Some(Verb::Help),
                 other if UNSUPPORTED_VERBS.contains(&other) => {
                     Some(Verb::Unimplemented(other.to_string()))
@@ -219,6 +242,13 @@ pub fn parse(args: &[String]) -> Result<Invocation, ParseError> {
             }
         }
     }
+
+    // `set` and `unset` are the only verbs with positionals beyond the file, so the
+    // positional arm below has to know which shape it is filling. Read from the
+    // SUBCOMMAND only: `sops -d f.yaml '["a"]' 'v'` is not a set, and treating a
+    // stray third word as a value would write a secret the caller never asked to
+    // write.
+    let takes_path_args = matches!(verb_from_subcommand, Some(Verb::Set) | Some(Verb::Unset));
 
     while i < args.len() {
         let arg = &args[i];
@@ -291,10 +321,14 @@ pub fn parse(args: &[String]) -> Result<Invocation, ParseError> {
                 return Err(ParseError::UnknownFlag(other.to_string()));
             }
 
-            // A positional: the file.
-            positional => match &inv.file {
-                None => inv.file = Some(PathBuf::from(positional)),
-                Some(first) => {
+            // A positional: the file, then (for set/unset) the path and the value.
+            positional => match (&inv.file, takes_path_args, &inv.path_expr) {
+                (None, _, _) => inv.file = Some(PathBuf::from(positional)),
+                (Some(_), true, None) => inv.path_expr = Some(positional.to_string()),
+                (Some(_), true, Some(_)) if inv.value_expr.is_none() => {
+                    inv.value_expr = Some(positional.to_string());
+                }
+                (Some(first), _, _) => {
                     return Err(ParseError::TooManyFiles {
                         first: first.display().to_string(),
                         second: positional.to_string(),
@@ -338,7 +372,11 @@ pub fn help_text() -> String {
     s.push_str("    suminuri edit [flags] <file>         decrypt, edit, re-encrypt in place\n");
     s.push_str("    suminuri rotate [flags] <file>       new data key, re-encrypt every value\n");
     s.push_str("    suminuri updatekeys <file>           re-wrap for the config's recipients\n");
-    s.push_str("    suminuri filestatus <file>           report whether the file is encrypted\n\n");
+    s.push_str("    suminuri filestatus <file>           report whether the file is encrypted\n");
+    s.push_str(
+        "    suminuri set <file> <path> <val>     write one leaf, e.g. '[\"db\"][\"handle\"]' '\"text\"'\n",
+    );
+    s.push_str("    suminuri unset <file> <path>         remove one leaf\n\n");
     s.push_str("FLAGS:\n");
     s.push_str("    -d, --decrypt            decrypt to stdout\n");
     s.push_str("    -e, --encrypt            encrypt to stdout\n");

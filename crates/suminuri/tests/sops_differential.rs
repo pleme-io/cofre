@@ -663,3 +663,107 @@ fn a_file_neither_holds_a_key_for_is_refused_by_both() {
     assert_ne!(mine, 0, "we must refuse a file we have no key for");
     assert!(out.is_empty(), "a refusal must print no plaintext");
 }
+
+/// ★ `set` AGAINST THE ORACLE — the case that decides whether the alias is honest.
+///
+/// `set` was the one refused verb the fleet actually used (one live caller in the
+/// nix repo plus two operator docs), so it is also the one whose *semantics* had to
+/// match rather than merely exist. Both binaries write the same key on the same
+/// encrypted file; the check is that the DECRYPTED result agrees, and that each
+/// binary's output is readable by the other.
+///
+/// The comparison is deliberately on the decrypted plaintext, not the ciphertext:
+/// two correct implementations produce different bytes for the leaf they rewrite
+/// (fresh nonce), so a byte comparison of the file would fail for a good reason and
+/// teach nothing.
+#[test]
+fn both_binaries_set_a_key_to_the_same_result() {
+    let Some(o) = oracle_or_skip() else { return };
+    let mut checked = 0;
+    for (name, plain) in CORPUS {
+        let src = format!("{name}-set-plain.yaml");
+        o.write(&src, plain.as_bytes());
+        let (code, encrypted, err) = o.sops(&["-e", &src]);
+        assert_eq!(code, 0, "{name}: sops encrypt failed: {err}");
+
+        // Pick a key that exists in this fixture's top level, so the case exercises
+        // an overwrite rather than a create on every corpus entry.
+        let Some(key) = plain
+            .lines()
+            .find(|l| !l.starts_with(' ') && l.contains(':') && !l.trim_end().ends_with(':'))
+            .and_then(|l| l.split(':').next())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let path = format!("[\"{key}\"]");
+
+        let theirs_file = format!("{name}-set-theirs.yaml");
+        let ours_file = format!("{name}-set-ours.yaml");
+        o.write(&theirs_file, &encrypted);
+        o.write(&ours_file, &encrypted);
+
+        let (tc, _, terr) = o.sops(&["set", &theirs_file, &path, "\"differential\""]);
+        assert_eq!(tc, 0, "{name}: oracle set failed: {terr}");
+        let (oc, _, oerr) = o.ours(&["set", &ours_file, &path, "\"differential\""]);
+        assert_eq!(oc, 0, "{name}: our set failed: {oerr}");
+
+        // Each binary reads the other's output — the property that makes the alias
+        // safe to roll back mid-flight.
+        let (_, theirs_plain, _) = o.sops(&["-d", &ours_file]);
+        let (_, ours_plain, err) = o.ours(&["-d", &theirs_file]);
+        let theirs_plain = String::from_utf8_lossy(&theirs_plain).into_owned();
+        let ours_plain = String::from_utf8_lossy(&ours_plain).into_owned();
+
+        assert!(
+            !theirs_plain.is_empty(),
+            "{name}: the oracle could not read our set output"
+        );
+        assert!(
+            theirs_plain.contains("differential"),
+            "{name}: our set did not take effect as the oracle reads it"
+        );
+        assert_eq!(
+            ours_plain,
+            theirs_plain,
+            "{name}: set results differ ({err})\n{}",
+            diff_report(&theirs_plain, &ours_plain)
+        );
+        checked += 1;
+    }
+    println!("{checked} comparisons: `set` agrees with the oracle, both directions");
+    assert!(checked > 0, "the corpus yielded no comparable case");
+}
+
+/// `unset` likewise: the key must be gone, and the oracle must agree it is gone.
+#[test]
+fn both_binaries_unset_a_key_to_the_same_result() {
+    let Some(o) = oracle_or_skip() else { return };
+    let plain = "alpha: one\nbeta: two\ngamma: three\n";
+    o.write("unset-plain.yaml", plain.as_bytes());
+    let (code, encrypted, err) = o.sops(&["-e", "unset-plain.yaml"]);
+    assert_eq!(code, 0, "sops encrypt failed: {err}");
+    o.write("unset-theirs.yaml", &encrypted);
+    o.write("unset-ours.yaml", &encrypted);
+
+    let (tc, _, terr) = o.sops(&["unset", "unset-theirs.yaml", "[\"beta\"]"]);
+    assert_eq!(tc, 0, "oracle unset failed: {terr}");
+    let (oc, _, oerr) = o.ours(&["unset", "unset-ours.yaml", "[\"beta\"]"]);
+    assert_eq!(oc, 0, "our unset failed: {oerr}");
+
+    let (_, theirs_plain, _) = o.sops(&["-d", "unset-ours.yaml"]);
+    let (_, ours_plain, err) = o.ours(&["-d", "unset-theirs.yaml"]);
+    let theirs_plain = String::from_utf8_lossy(&theirs_plain).into_owned();
+    let ours_plain = String::from_utf8_lossy(&ours_plain).into_owned();
+
+    assert!(
+        !theirs_plain.contains("beta"),
+        "the oracle still sees beta after our unset:\n{theirs_plain}"
+    );
+    assert_eq!(
+        ours_plain,
+        theirs_plain,
+        "unset results differ ({err})\n{}",
+        diff_report(&theirs_plain, &ours_plain)
+    );
+}
