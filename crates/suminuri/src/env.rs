@@ -60,7 +60,29 @@ pub trait Environment {
     /// Named `secure` because the implementation is expected to prefer a
     /// memory-backed filesystem where one exists — the RAMDISK doctrine's point
     /// that a drive is where undeclared state hides.
+    ///
+    /// Whatever this returns MUST be handed to [`Environment::shred_dir`] before
+    /// the process exits. There is a `Drop` guard for that in `app::edit`; this
+    /// comment is the reason it exists.
     fn secure_temp_dir(&self) -> io::Result<PathBuf>;
+
+    /// Overwrite every file under `dir`, then remove the directory.
+    ///
+    /// **This is the half that was missing, and the omission put real plaintext
+    /// on a real disk.** `edit` decrypts to a scratch file so an editor can open
+    /// it; the first version created that file 0600 in a 0700 directory and never
+    /// removed either. Measured on cid 2026-08-19: **92 leftover scratch
+    /// directories, 3 of them holding a fully decrypted copy of the operator's
+    /// `users/drzzln/secrets.yaml`** — and the doc comment above the code claimed
+    /// "removed afterwards".
+    ///
+    /// The overwrite is best-effort and says so. On a copy-on-write filesystem
+    /// (APFS here) writing zeros over a file need not touch the blocks the old
+    /// contents occupied, and an SSD's wear levelling can retain them regardless.
+    /// It raises the cost of casual recovery; it is not erasure. The honest
+    /// mitigation is not writing plaintext to a disk at all, which needs a
+    /// memory-backed scratch mount — `pending-suminuri: memory-backed edit buffer`.
+    fn shred_dir(&self, dir: &Path) -> io::Result<()>;
 }
 
 /// The real one.
@@ -147,6 +169,34 @@ impl Environment for RealEnvironment {
         set_mode(&dir, 0o700)?;
         Ok(dir)
     }
+
+    fn shred_dir(&self, dir: &Path) -> io::Result<()> {
+        // Overwrite before unlinking. Best-effort on a CoW filesystem — see the
+        // trait docs — but a plaintext that is zeroed and then removed is a
+        // strictly smaller exposure than one merely removed.
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(len) = std::fs::metadata(&path).map(|m| m.len()) {
+                        // `write` truncates, so this replaces the contents rather
+                        // than appending to them.
+                        let _ = std::fs::write(&path, vec![0u8; usize::try_from(len).unwrap_or(0)]);
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+        // `remove_dir_all` rather than `remove_dir`: a nested directory left by an
+        // editor's swap/backup file would otherwise keep the parent alive, and the
+        // parent is what carries the 0700.
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => Ok(()),
+            // Already gone is the desired state, not a failure.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -196,6 +246,9 @@ pub struct MockEnvironment {
     now: String,
     /// What an `edit_file` call should write, and whether it counts as a change.
     edit_result: Option<(String, bool)>,
+    /// Directories `shred_dir` was called on, so a test can assert the scratch
+    /// was cleaned rather than trusting that it was.
+    shredded: std::cell::RefCell<Vec<PathBuf>>,
 }
 
 impl MockEnvironment {
@@ -245,6 +298,12 @@ impl MockEnvironment {
     pub fn mode(&self, path: &str) -> Option<u32> {
         self.modes.borrow().get(Path::new(path)).copied()
     }
+
+    /// Whether `shred_dir` was called on this path.
+    #[must_use]
+    pub fn was_shredded(&self, path: &str) -> bool {
+        self.shredded.borrow().iter().any(|p| p == Path::new(path))
+    }
 }
 
 impl Environment for MockEnvironment {
@@ -290,6 +349,15 @@ impl Environment for MockEnvironment {
 
     fn secure_temp_dir(&self) -> io::Result<PathBuf> {
         Ok(PathBuf::from("/mock-tmp"))
+    }
+
+    fn shred_dir(&self, dir: &Path) -> io::Result<()> {
+        let prefix = dir.to_path_buf();
+        self.files
+            .borrow_mut()
+            .retain(|p, _| !p.starts_with(&prefix));
+        self.shredded.borrow_mut().push(prefix);
+        Ok(())
     }
 }
 
