@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "00ed99aa835cbed1149e3eeb9a4ccd28ee2ae8fedacceac3ad5316ab925902f9",
+  "cargo_lock_sha256": "b9982e050de5f88bec5a63715afaa517e9f264b19213ef9aa4eb0988a20ef4a4",
   "manifest_sha256": {
     "Cargo.toml": "0777c141aa2b1d0f965d759f73c18317cd32ee17aca403693a2b507946b48ec1",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
-    "crates/cofre/Cargo.toml": "c75c4ddfe4868e20142e17b0969383fbd4c6ca1be7d5f10f1b1d718a3201e423",
+    "crates/cofre/Cargo.toml": "11ae0fa5289008f3934e76b5a20f7190e5138d6190d9e4d322a54257412bc0c9",
     "crates/suminuri-wire/Cargo.toml": "d456c4265f7b2a28742dcaf0b8b390cb66e537efa228810edb268ea04b0cbc6c",
     "crates/suminuri-yaml/Cargo.toml": "6f8b21e46ad66408554594d0313eabdd07cdab1dde42590f7c363098299f78c8",
     "crates/suminuri/Cargo.toml": "9ef08a7d5889021dea731060cdcf9b04562c262c3bb7a61bf429c1831d28f40c"
@@ -1191,6 +1191,16 @@
           {
             "name": "serde_yaml",
             "package_key": "serde_yaml-0.9.34+deprecated",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "suminuri_yaml",
+            "package_key": "suminuri-yaml-0.1.10",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,

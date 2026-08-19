@@ -384,66 +384,142 @@ pub fn run_editor_hook(plaintext_path: &std::path::Path) -> std::io::Result<()> 
     // Read decrypted YAML SOPS handed us. Body is plaintext; treat
     // with care — never log it.
     let body = std::fs::read_to_string(plaintext_path)?;
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&body)
+
+    // ★ THIS PARSES WITH `suminuri_yaml`, NOT `serde_yaml` — AND WHAT THAT BUYS IS
+    // A LOUD REFUSAL, *NOT* COMMENT PRESERVATION. Stated precisely because the first
+    // version of this comment claimed preservation and was wrong.
+    //
+    // `serde_yaml::Value` has no variant for a comment, so `from_str` → `to_string`
+    // silently DELETED every comment in the file. Style went with it: block scalars
+    // collapsed and quoting was re-decided by serde's rules.
+    //
+    // `suminuri_yaml::parse` instead REFUSES a commented document by name
+    // (`CommentsUnsupported { line }`). Its tree does model comments — `Item::Comment`
+    // and `Entry::Comment` are variants, used when re-emitting — but the parser does
+    // not yet build them, and a refusal is the honest state to be in: this hook
+    // rewrites the operator's decrypted secrets, so silently dropping documentation
+    // is the one outcome worse than failing.
+    //
+    // Measured before making the swap (2026-08-19): both real fleet files —
+    // `nix/secrets.yaml` (1381 lines) and `nix/users/drzzln/secrets.yaml` (93) —
+    // contain ZERO comment lines in their decrypted bodies, and the encrypted forms
+    // carry zero `#ENC[` comment markers. So the refusal costs the fleet nothing
+    // today while the silent strip was a standing hazard.
+    //
+    // What the swap also buys, and this part is unqualified: every `Scalar` keeps the
+    // `ScalarStyle` it was parsed with, so quoting and block scalars survive a
+    // round-trip that serde_yaml re-decided. One YAML model for sops files, in one
+    // place.
+    //
+    // `pending-suminuri: comment-preserving parse` — the load-bearing fix is teaching
+    // the parser to build the comment variants its tree already has, at which point
+    // this becomes preservation rather than refusal.
+    //
+    // `cofre-types` still uses serde_yaml, correctly: it serialises cofre's OWN typed
+    // plan struct, where there are no comments to lose and serde's derive is the right
+    // tool. The rule is about whose file it is, not about the library.
+    let mut doc = suminuri_yaml::parse(&body)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let root = doc.roots.first_mut().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "empty YAML document")
+    })?;
 
     let mut wrote_any = false;
     for entry in &plan_slice {
-        let already_present = yaml_get(&doc, &entry.yaml_path).is_some();
+        let already_present = yaml_get(root, &entry.yaml_path).is_some();
         if already_present && !entry.force {
             continue;
         }
         let value = generation::generate(&entry.policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        yaml_set(
-            &mut doc,
-            &entry.yaml_path,
-            serde_yaml::Value::String((*value).clone()),
-        );
+        yaml_set(root, &entry.yaml_path, (*value).clone());
         wrote_any = true;
     }
 
     if wrote_any {
-        let new_body = serde_yaml::to_string(&doc)
+        let new_body = suminuri_yaml::emit(&doc, suminuri_yaml::EmitOptions::default())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         std::fs::write(plaintext_path, new_body)?;
     }
     Ok(())
 }
 
-fn yaml_get<'a>(doc: &'a serde_yaml::Value, dotted: &str) -> Option<&'a serde_yaml::Value> {
+/// Look up a dotted path in a `suminuri_yaml` tree.
+///
+/// Note the path grammar here is DOTTED (`a.b.c`), not sops's bracket form
+/// (`["a"]["b"]`). They are deliberately not unified: this one comes from cofre's
+/// own `yaml_path` plan field, which is cofre's schema to define, while the bracket
+/// form is sops's CLI contract that `suminuri` must reproduce exactly. Merging them
+/// would mean one of the two surfaces silently accepting the other's syntax.
+fn yaml_get<'a>(doc: &'a suminuri_yaml::Value, dotted: &str) -> Option<&'a suminuri_yaml::Value> {
     let mut cur = doc;
     for part in dotted.split('.') {
-        let m = cur.as_mapping()?;
-        cur = m.get(serde_yaml::Value::String(part.into()))?;
+        cur = cur.get(part)?;
     }
     Some(cur)
 }
 
-fn yaml_set(doc: &mut serde_yaml::Value, dotted: &str, value: serde_yaml::Value) {
+/// Set a dotted path, creating intermediate mappings.
+///
+/// An existing key is updated **in place** and a new key is **appended**, so the
+/// mapping is never rebuilt and nothing around the write moves. That is what keeps
+/// a `Comment` item's position stable once the parser learns to produce one; today
+/// it is what keeps every untouched key's style and order intact.
+fn yaml_set(doc: &mut suminuri_yaml::Value, dotted: &str, value: String) {
+    use suminuri_yaml::{Item, Scalar, Value};
+
     let parts: Vec<&str> = dotted.split('.').collect();
-    if !doc.is_mapping() {
-        *doc = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    if !matches!(doc, Value::Mapping(_)) {
+        *doc = Value::Mapping(Vec::new());
     }
     let mut cur = doc;
     for part in &parts[..parts.len() - 1] {
-        let key = serde_yaml::Value::String((*part).into());
-        let map = cur
-            .as_mapping_mut()
-            .expect("yaml_set traversal expected mapping");
-        if !map.contains_key(&key) {
-            map.insert(
-                key.clone(),
-                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
-            );
+        let Value::Mapping(items) = cur else {
+            // A non-mapping on the way down. The previous version `expect`ed here and
+            // would panic inside a sops-invoked editor hook, which surfaces as a
+            // failed rebuild with no explanation. Replacing the node is the same
+            // behaviour serde_yaml's version had after its own `is_mapping` reset,
+            // without the panic path.
+            *cur = Value::Mapping(Vec::new());
+            continue;
+        };
+        let present = items
+            .iter()
+            .any(|i| matches!(i, Item::Pair { key, .. } if key == *part));
+        if !present {
+            items.push(Item::Pair {
+                key: (*part).to_string(),
+                value: Value::Mapping(Vec::new()),
+            });
         }
-        cur = map.get_mut(&key).expect("just-inserted key present");
+        cur = items
+            .iter_mut()
+            .find_map(|i| match i {
+                Item::Pair { key, value } if key == *part => Some(value),
+                _ => None,
+            })
+            .expect("just-inserted key present");
     }
-    let last_key = serde_yaml::Value::String((*parts.last().unwrap()).into());
-    let map = cur
-        .as_mapping_mut()
-        .expect("final yaml_set traversal expected mapping");
-    map.insert(last_key, value);
+
+    let last = *parts.last().expect("split always yields one part");
+    let Value::Mapping(items) = cur else {
+        *cur = Value::Mapping(vec![Item::Pair {
+            key: last.to_string(),
+            value: Value::Scalar(Scalar::new(value)),
+        }]);
+        return;
+    };
+    if let Some(slot) = items.iter_mut().find_map(|i| match i {
+        Item::Pair { key, value } if key == last => Some(value),
+        _ => None,
+    }) {
+        *slot = Value::Scalar(Scalar::new(value));
+    } else {
+        items.push(Item::Pair {
+            key: last.to_string(),
+            value: Value::Scalar(Scalar::new(value)),
+        });
+    }
 }
 
 // SopsBackend doesn't implement SecretBackend in the per-secret shape
@@ -486,24 +562,116 @@ mod tests {
         assert_eq!(b.value_length("mock:foo"), Some(11));
     }
 
+    fn scalar_at(doc: &suminuri_yaml::Value, path: &str) -> Option<String> {
+        match yaml_get(doc, path)? {
+            suminuri_yaml::Value::Scalar(s) => Some(s.value.clone()),
+            _ => None,
+        }
+    }
+
     #[test]
     fn yaml_set_creates_intermediate_maps() {
-        let mut doc = serde_yaml::Value::Null;
-        yaml_set(&mut doc, "a.b.c", serde_yaml::Value::String("hi".into()));
-        let v = yaml_get(&doc, "a.b.c").unwrap();
-        assert_eq!(v.as_str(), Some("hi"));
+        let mut doc = suminuri_yaml::Value::Mapping(Vec::new());
+        yaml_set(&mut doc, "a.b.c", "hi".to_string());
+        assert_eq!(scalar_at(&doc, "a.b.c").as_deref(), Some("hi"));
     }
 
     #[test]
     fn yaml_set_overwrites_existing() {
-        let mut doc: serde_yaml::Value = serde_yaml::from_str("a:\n  b: old").unwrap();
-        yaml_set(&mut doc, "a.b", serde_yaml::Value::String("new".into()));
-        assert_eq!(yaml_get(&doc, "a.b").unwrap().as_str(), Some("new"));
+        let mut doc = suminuri_yaml::parse("a:\n  b: old\n")
+            .unwrap()
+            .roots
+            .remove(0);
+        yaml_set(&mut doc, "a.b", "new".to_string());
+        assert_eq!(scalar_at(&doc, "a.b").as_deref(), Some("new"));
     }
 
     #[test]
     fn yaml_get_returns_none_for_missing_path() {
-        let doc: serde_yaml::Value = serde_yaml::from_str("a: 1").unwrap();
+        let doc = suminuri_yaml::parse("a: 1\n").unwrap().roots.remove(0);
         assert!(yaml_get(&doc, "a.b.c").is_none());
+    }
+
+    /// ★ WHAT THE SWAP ACTUALLY CHANGES: a commented file is now REFUSED BY NAME
+    /// instead of silently losing its comments.
+    ///
+    /// This test exists because the first version of it asserted the opposite —
+    /// that comments *survive* — and failed with `CommentsUnsupported { line: 1 }`.
+    /// The tree models comments; the parser does not yet build them. Pinning the
+    /// real behaviour keeps the next reader from re-deriving a preservation claim
+    /// the code does not make.
+    ///
+    /// Refusal is the right state for this hook: it rewrites the operator's
+    /// decrypted secrets, and `serde_yaml` would have dropped the documentation
+    /// with no diagnostic at all.
+    #[test]
+    fn a_commented_document_is_refused_not_silently_stripped() {
+        let src = "\
+# the fleet-wide bootstrap token; see docs/onboarding-secrets.md
+github:
+    classic: old-value
+";
+        match suminuri_yaml::parse(src) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.to_lowercase().contains("comment"),
+                    "the refusal must name comments, got: {msg}"
+                );
+            }
+            Ok(doc) => {
+                // If the parser ever learns comments, this must become a
+                // preservation assertion rather than quietly passing.
+                let out =
+                    suminuri_yaml::emit(&doc, suminuri_yaml::EmitOptions::default()).expect("emit");
+                assert!(
+                    out.contains("# the fleet-wide bootstrap token"),
+                    "the parser now accepts comments but the emitter dropped them:\n{out}"
+                );
+            }
+        }
+    }
+
+    /// A new key is APPENDED and an existing one is updated IN PLACE, so nothing
+    /// around the write moves. That is the property that will keep a comment's
+    /// position stable once the parser produces them, and today keeps every
+    /// untouched key's order and style intact.
+    #[test]
+    fn a_new_key_is_appended_and_untouched_keys_do_not_move() {
+        let src = "alpha: one\nbeta: two\n";
+        let mut doc = suminuri_yaml::parse(src).expect("parse");
+        yaml_set(
+            doc.roots.first_mut().expect("one root"),
+            "gamma",
+            "three".to_string(),
+        );
+        let out = suminuri_yaml::emit(&doc, suminuri_yaml::EmitOptions::default()).expect("emit");
+        let lines: Vec<&str> = out.lines().collect();
+        let pos = |p: &str| lines.iter().position(|l| l.starts_with(p));
+        assert_eq!(pos("alpha:"), Some(0), "order changed:\n{out}");
+        assert_eq!(pos("beta:"), Some(1), "order changed:\n{out}");
+        assert_eq!(pos("gamma:"), Some(2), "new key not appended:\n{out}");
+    }
+
+    /// An in-place update must not disturb the keys around it.
+    #[test]
+    fn an_update_in_place_leaves_siblings_byte_identical() {
+        let src = "alpha: one\nbeta: 'quoted two'\ngamma: three\n";
+        let mut doc = suminuri_yaml::parse(src).expect("parse");
+        yaml_set(
+            doc.roots.first_mut().expect("one root"),
+            "gamma",
+            "rewritten".to_string(),
+        );
+        let out = suminuri_yaml::emit(&doc, suminuri_yaml::EmitOptions::default()).expect("emit");
+        assert!(out.contains("alpha: one"), "sibling changed:\n{out}");
+        assert!(
+            out.contains("beta: 'quoted two'"),
+            "a sibling's QUOTING STYLE changed — the thing serde_yaml re-decided:\n{out}"
+        );
+        assert!(
+            out.contains("gamma: rewritten"),
+            "write did not take:\n{out}"
+        );
     }
 }
