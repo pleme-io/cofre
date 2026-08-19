@@ -216,15 +216,100 @@ fn open(inv: &Invocation, env: &dyn Environment) -> Result<(SopsFile, DataKey, I
     Ok((f, key, stash))
 }
 
+/// Load, unwrap, decrypt and verify EVERY document in the stream.
+///
+/// The read-path sibling of `open`. A multi-document sops file is N independent
+/// encrypted files sharing a byte stream — each with its own wrapped data key and
+/// its own MAC — so each is opened on its own terms and a MAC failure anywhere
+/// fails the whole read. See `SopsFile::load_encrypted_stream` for why only the
+/// read path is multi-document.
+fn open_stream(inv: &Invocation, env: &dyn Environment) -> Result<Vec<SopsFile>, AppError> {
+    let path = file_of(inv)?;
+    let src = read(env, path)?;
+    let mut docs = SopsFile::load_encrypted_stream(&src)?;
+    let ids = identities(env)?;
+    if let Some(indent) = inv.indent {
+        for f in &mut docs {
+            f.indent = indent;
+        }
+    }
+
+    // ONE data key and ONE MAC for the whole stream — see
+    // `SopsFile::decrypt_stream` for the measurement behind that. The key comes
+    // from the first document's metadata because every document carries a copy of
+    // the same metadata; a per-document key would be a different file format.
+    let key = docs
+        .first()
+        .ok_or(AppError::File(FileError::NotEncrypted))?
+        .data_key(&ids)?;
+    let mut stash = IvStash::new();
+    let unverified = SopsFile::decrypt_stream(&mut docs, &key, &mut stash)?;
+    {
+        if inv.ignore_mac {
+            let _ = unverified.into_inner_ignoring_mac();
+        } else if unverified.leaves_fed() == 0 {
+            // ★ AN EMPTY DOCUMENT IN A STREAM IS LEGITIMATE, AND THE STRICT PATH
+            // REPORTED IT AS A MAC MISMATCH.
+            //
+            // Measured on the fleet's own
+            // `clusters/plo/.../postgres-superset.yaml`: document 1 of 5 is two
+            // comments and an empty mapping, which upstream renders as `{}`. It has
+            // no MAC-eligible leaf, so the walk feeds nothing, and
+            // `verify_recording`'s anti-vacuity refusal fired — surfacing as
+            // "MAC mismatch", which sent me looking for corruption in a file that
+            // was fine.
+            //
+            // Allowing it is NOT dropping the check. `verify_allowing_empty` still
+            // runs `verify_mac_field_recording`, which decrypts the `mac:` field
+            // with `lastmodified` as its AAD and compares it to what the walk
+            // computed. So the guard being skipped here has real teeth behind it: a
+            // walk that fed nothing because discovery BROKE would compute MAC(empty)
+            // against a file whose sealed MAC covers actual leaves, and that
+            // comparison fails. The only input that passes this path is a document
+            // whose sealed MAC genuinely is the MAC of nothing.
+            //
+            // `open` (every write path) keeps the strict refusal: a single-document
+            // file that decrypts to nothing is far more likely a bug than an intent.
+            unverified
+                .verify_allowing_empty(&key)
+                .map_err(FileError::from)?;
+        } else {
+            unverified
+                .verify_recording(&key, Some(&mut stash))
+                .map_err(FileError::from)?;
+        }
+    }
+    Ok(docs)
+}
+
 fn decrypt(
     inv: &Invocation,
     env: &dyn Environment,
     out: &mut dyn std::io::Write,
 ) -> Result<Outcome, AppError> {
-    let (f, _, _) = open(inv, env)?;
+    let docs = open_stream(inv, env)?;
     let body = match &inv.extract {
-        Some(path) => extract(&f.tree, path)?,
-        None => f.render_plain()?,
+        Some(path) => {
+            // A bracket path names a location inside ONE document, and a stream has
+            // no rule for which. Refusing beats extracting from the first and
+            // silently returning the wrong secret when a caller meant another.
+            if docs.len() != 1 {
+                return Err(AppError::File(FileError::MultiDocument {
+                    docs: docs.len(),
+                }));
+            }
+            extract(&docs[0].tree, path)?
+        }
+        None => {
+            // `---` BETWEEN documents, never before the first. Measured against
+            // upstream sops 3.12.1 on a real 5-document file: 4 separators, 155
+            // lines, and the leading comment still first.
+            let mut parts = Vec::with_capacity(docs.len());
+            for f in &docs {
+                parts.push(f.render_plain()?);
+            }
+            parts.join("---\n")
+        }
     };
     match (&inv.output, inv.in_place) {
         (Some(target), _) => {

@@ -103,9 +103,25 @@ fn emit_mapping(
     out: &mut String,
     ctx: Context,
 ) -> Result<(), YamlError> {
-    if items.is_empty() {
-        // go-yaml emits an empty block mapping as a flow `{}`, since a block
-        // mapping with no keys has no representation.
+    // ★ A MAPPING WITH NO *PAIRS* IS EMPTY EVEN IF IT HOLDS COMMENTS.
+    //
+    // go-yaml emits an empty block mapping as a flow `{}`, since a block mapping
+    // with no keys has no representation — and comments do not give it one. Missed
+    // at first because the guard tested `items.is_empty()`, which a comments-only
+    // mapping fails: document 0 of the fleet's
+    // `clusters/plo/.../postgres-superset.yaml` is exactly two comments and no
+    // keys, and upstream renders it as the two comment lines FOLLOWED BY `{}`.
+    // We emitted the comments and then nothing, one line short.
+    //
+    // So the comments are written first, at this collection's indent, and then the
+    // `{}` that stands for the keyless mapping.
+    if !items.iter().any(|i| matches!(i, Item::Pair { .. })) {
+        for item in items {
+            if let Item::Comment(body) = item {
+                push_indent(out, ind.column());
+                emit_comment(body, out);
+            }
+        }
         match ctx {
             Context::MappingValue | Context::SequenceItem => out.push_str(" {}\n"),
             Context::Root => out.push_str("{}\n"),
@@ -122,11 +138,17 @@ fn emit_mapping(
 
     for (i, item) in items.iter().enumerate() {
         match item {
-            Item::Comment(_) => {
-                // Unreachable via `parse`, which refuses comments. Named rather
-                // than silently skipped so a programmatically-built tree cannot
-                // lose an operator's comment on the way out.
-                return Err(YamlError::CommentsUnsupported { line: 0 });
+            Item::Comment(body) => {
+                // A comment occupies its own line at the collection's indent. It
+                // cannot share the dash's line inside a `- ` item, so when it is
+                // the first thing in a sequence item the dash's line is closed
+                // first — matching what go-yaml does with a head comment on the
+                // first key of a nested mapping.
+                if i == 0 && ctx == Context::SequenceItem {
+                    out.push('\n');
+                }
+                push_indent(out, ind.column());
+                emit_comment(body, out);
             }
             Item::Pair { key, value } => {
                 // The first pair inside a `- ` item continues the dash's line;
@@ -175,7 +197,10 @@ fn emit_sequence(
 
     for entry in entries {
         match entry {
-            Entry::Comment(_) => return Err(YamlError::CommentsUnsupported { line: 0 }),
+            Entry::Comment(body) => {
+                push_indent(out, ind.column());
+                emit_comment(body, out);
+            }
             Entry::Value(v) => {
                 push_indent(out, ind.column());
                 out.push('-');
@@ -186,6 +211,19 @@ fn emit_sequence(
 
     ind.decrease();
     Ok(())
+}
+
+/// One comment line: `#` then the stored body, which by construction excludes the
+/// leading `#` (the store's `commentLine[1:]`).
+///
+/// The body is written verbatim — never trimmed, never re-spaced. `# note` and
+/// `#note` differ by one byte of body and a byte comparison against upstream sees
+/// it, so normalising here would be a silent rewrite of the operator's text. A
+/// bare `#` line has an empty body and emits as `#`.
+fn emit_comment(body: &str, out: &mut String) {
+    out.push('#');
+    out.push_str(body);
+    out.push('\n');
 }
 
 /// A mapping key.
@@ -293,7 +331,17 @@ fn emit_block_scalar(s: &Scalar, ind: &mut Indenter, out: &mut String, ctx: Cont
     }
     out.push('\n');
 
-    ind.increase(false, false);
+    // ★ A BLOCK SCALAR INSIDE A `- ` ITEM TAKES THE SEQUENCE INDENT RULE.
+    //
+    // go-yaml's `increase_indent_compact` is `cur + 2` when the node is a sequence
+    // item and `best * ((cur + best) / best)` otherwise, and this call passed
+    // `false` unconditionally — so a `- |` script body came out at the rounded-up
+    // column instead of dash + 2. Measured on the fleet's
+    // `dns-infrastructure/vaultwarden-deployment.yaml`, whose dash sits at 28:
+    // upstream emits the body at 30, we emitted 32, which is exactly
+    // `4 * ((28 + 4) / 4)`. The arithmetic matching that formula is what identified
+    // the wrong branch rather than a guess at "off by two".
+    ind.increase(ctx == Context::SequenceItem, false);
     let body_indent = ind.column();
     // Split on '\n' and drop the trailing empty piece so the chomping indicator,
     // not a blank line, carries the final newline.
@@ -343,6 +391,31 @@ fn push_double_quoted(out: &mut String, v: &str) {
             '\u{1b}' => out.push_str("\\e"),
             c if (c as u32) < 0x20 => {
                 out.push_str(&format_escape(c as u32));
+            }
+            // ★ NON-BMP CHARACTERS ARE ESCAPED `\UXXXXXXXX`; BMP ONES ARE NOT.
+            //
+            // Not a style choice — it falls out of libyaml's `IS_PRINTABLE`, which
+            // enumerates FIRST BYTES: `0x20..=0x7E` (ASCII) and `0xC2..=0xEF`
+            // (2- and 3-byte sequences, i.e. the BMP). `0xF0..=0xF4` — every 4-byte
+            // sequence, i.e. everything above U+FFFF — is absent, so libyaml calls
+            // it unprintable and `yaml_emitter_write_double_quoted` escapes it.
+            //
+            // The corpus is what proved the split rather than the macro reading
+            // alone: `clusters/plo/.../superset-database-setup.yaml` contains both
+            // `✓` (U+2713, BMP) and `🔧` (U+1F527, non-BMP), and upstream emits the
+            // first literally and the second as `\U0001F527`. A rule that escaped
+            // all non-ASCII would have broken the `✓`, and one that escaped nothing
+            // broke the `🔧`; only this boundary reproduces both.
+            c if (c as u32) > 0xFFFF => {
+                out.push_str("\\U");
+                for shift in (0..8).rev() {
+                    let nibble = ((c as u32) >> (shift * 4)) & 0xF;
+                    out.push(
+                        char::from_digit(nibble, 16)
+                            .unwrap_or('0')
+                            .to_ascii_uppercase(),
+                    );
+                }
             }
             c => out.push(c),
         }
@@ -520,8 +593,11 @@ sops:
         assert_eq!(emit(&doc, EmitOptions { indent: 2 }).expect("emit"), src);
     }
 
+    /// A hand-built comment is now EMITTED rather than refused. The old assertion
+    /// (`CommentsUnsupported`) existed only because the parser could never produce
+    /// one; now that it can, losing it on the way out would be the actual defect.
     #[test]
-    fn a_comment_in_a_hand_built_tree_is_refused_not_dropped() {
+    fn a_comment_in_a_hand_built_tree_is_emitted() {
         let doc = Document::single(Value::Mapping(vec![
             Item::Comment(" note".into()),
             Item::Pair {
@@ -529,9 +605,7 @@ sops:
                 value: Value::Scalar(Scalar::new("v")),
             },
         ]));
-        assert!(matches!(
-            emit(&doc, EmitOptions::default()),
-            Err(YamlError::CommentsUnsupported { .. })
-        ));
+        let out = emit(&doc, EmitOptions::default()).expect("comments emit now");
+        assert_eq!(out, "# note\nk: v\n");
     }
 }

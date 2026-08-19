@@ -125,6 +125,23 @@ pub enum WireError {
     #[error("MAC mismatch — the file's contents do not match its recorded MAC")]
     MacMismatch,
 
+    /// The walk fed NOTHING to the MAC, so a comparison would prove nothing about
+    /// the contents.
+    ///
+    /// Distinct from [`WireError::MacMismatch`] on purpose. It was reported as a
+    /// mismatch until 2026-08-19, and that cost real diagnosis time on a file that
+    /// was not corrupt at all: document 1 of a real 5-document fleet file is two
+    /// comments and an empty mapping, which legitimately has no MAC-eligible leaf.
+    /// An error that names the wrong cause sends the reader hunting for corruption.
+    ///
+    /// A caller that genuinely expects an empty document uses
+    /// `Unverified::verify_allowing_empty`, which still verifies the MAC FIELD's own
+    /// seal — so allowing empty is not the same as skipping the check.
+    #[error(
+        "nothing was fed to the MAC, so verifying it would prove nothing about this document's contents. If the document is genuinely empty, that is expected — see verify_allowing_empty."
+    )]
+    NothingToVerify,
+
     /// The MAC field itself would not decrypt, which usually means the data key
     /// is wrong or `lastmodified` was edited by hand.
     #[error("could not decrypt the MAC field (wrong data key, or lastmodified was edited)")]
