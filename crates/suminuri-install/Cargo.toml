@@ -41,3 +41,7 @@ pedantic = "warn"
 # right only when it is convenient.
 ssh-key = { version = "0.6", features = ["ed25519", "alloc", "rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+[[bin]]
+name = "suminuri-install-secrets"
+path = "src/bin/suminuri-install-secrets.rs"

@@ -68,9 +68,17 @@ impl Fs for RealFs {
         f.write_all(contents).map_err(|e| e.to_string())
     }
 
-    fn chown(&self, path: &str, owner: &str, group: &str) -> Result<(), String> {
-        let uid = uid_of(owner).ok_or_else(|| format!("no such user: {owner}"))?;
-        let gid = gid_of(group).ok_or_else(|| format!("no such group: {group}"))?;
+    fn chown(&self, path: &str, own: &crate::place::Ownership) -> Result<(), String> {
+        // ★ A name that does not resolve is an ERROR, never a fallback to 0.
+        // Silently chowning a credential to root is the failure that looks
+        // exactly like success.
+        let (uid, gid) = match own {
+            crate::place::Ownership::ByName { owner, group } => (
+                uid_of(owner).ok_or_else(|| format!("no such user: {owner}"))?,
+                gid_of(group).ok_or_else(|| format!("no such group: {group}"))?,
+            ),
+            crate::place::Ownership::ByIds { uid, gid } => (*uid, *gid),
+        };
         let c = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
         // SAFETY: valid path string; uid/gid came from the passwd/group db.
         if unsafe { libc::chown(c.as_ptr(), uid, gid) } != 0 {

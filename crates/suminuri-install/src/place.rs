@@ -40,8 +40,8 @@ pub enum Step {
     /// ★ `mode` here is ALWAYS the restrictive create mode, never the
     /// secret's declared one — see ordering rule 1.
     Write { path: String, key: String, from_file: String },
-    /// Set ownership, then permissions. Both, in this order, per secret.
-    Chown { path: String, owner: String, group: String },
+    /// Set ownership, then permissions. Both, in this order, per entry.
+    Chown { path: String, own: Ownership },
     Chmod { path: String, mode: u32 },
     /// Point `/run/secrets` at the completed generation, atomically.
     SwapSymlink { link: String, target: String },
@@ -49,9 +49,42 @@ pub enum Step {
     RemoveGeneration { path: String },
 }
 
+/// How an entry's ownership is expressed.
+///
+/// ★ BOTH FORMS ARE REAL, measured on plo: 16 of 27 entries carry
+/// `"owner": null` with a numeric `uid`, and 11 carry names. Defaulting a null
+/// name to `"root"` would be a SILENT WRONG CHOWN — the file would be created,
+/// the run would succeed, and a service would fail to read its own credential
+/// for a reason nothing reports. So the absence is modelled instead of
+/// papered over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ownership {
+    /// Resolve `owner`/`group` through the passwd and group databases.
+    ByName { owner: String, group: String },
+    /// Use the numeric ids directly.
+    ///
+    /// ★ Not merely a cache of the names: an entry may carry a uid for an
+    /// account that does not exist yet, which is exactly the `neededForUsers`
+    /// case this installer places in an earlier pass.
+    ByIds { uid: u32, gid: u32 },
+}
+
 /// Errors building a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanError {
+    /// An entry names neither an owner nor a uid.
+    NoOwnership { entry: String },
+    /// The manifest carries templates, which this planner does not render yet.
+    ///
+    /// ★ A REFUSAL, NOT AN OMISSION. plo's manifest has four templates, and a
+    /// planner that quietly skipped them would place all 27 plain entries
+    /// correctly and leave four files missing — including cloudflared's
+    /// credentials. Every consumer would see a working install and a service
+    /// that cannot start, with nothing connecting the two.
+    ///
+    /// This is the `kotae` rule applied to a planner: an unimplemented
+    /// capability must not render as a successful plan.
+    TemplatesUnsupported { count: usize },
     /// An entry's mode string was not octal.
     ///
     /// ★ The field is `entry`, not the obvious alternative. It holds a NAME,
@@ -68,6 +101,17 @@ impl std::fmt::Display for PlanError {
             Self::BadMode { entry, mode } => {
                 write!(f, "entry {entry}: mode {mode:?} is not octal")
             }
+            Self::TemplatesUnsupported { count } => write!(
+                f,
+                "this manifest carries {count} template(s), which are not rendered yet — \
+                 refusing rather than installing an incomplete generation"
+            ),
+            Self::NoOwnership { entry } => write!(
+                f,
+                "entry {entry}: neither an owner name nor a uid — refusing rather than \
+                 guessing root, which would create the file and leave a service unable \
+                 to read its own credential"
+            ),
         }
     }
 }
@@ -76,6 +120,18 @@ impl std::fmt::Display for PlanError {
 ///
 /// ★ 0600 root-only. Not the declared mode: see ordering rule 1.
 pub const CREATE_MODE: u32 = 0o600;
+
+/// Which ownership form an entry uses.
+fn ownership_of(s: &Secret) -> Result<Ownership, PlanError> {
+    match (&s.owner, &s.group, s.uid, s.gid) {
+        (Some(o), Some(g), _, _) => Ok(Ownership::ByName {
+            owner: o.clone(),
+            group: g.clone(),
+        }),
+        (_, _, Some(uid), Some(gid)) => Ok(Ownership::ByIds { uid, gid }),
+        _ => Err(PlanError::NoOwnership { entry: s.name.clone() }),
+    }
+}
 
 fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
     let mode = secret.mode_octal().map_err(|m| PlanError::BadMode {
@@ -89,11 +145,7 @@ fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
             key: secret.key.clone(),
             from_file: secret.sops_file.clone(),
         },
-        Step::Chown {
-            path: path.clone(),
-            owner: secret.owner.clone(),
-            group: secret.group.clone(),
-        },
+        Step::Chown { path: path.clone(), own: ownership_of(secret)? },
         Step::Chmod { path, mode },
     ])
 }
@@ -105,6 +157,11 @@ fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
 /// abandoned entirely rather than skipping that secret, because a partially
 /// planned generation is the thing rule 2 exists to prevent.
 pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
+    // ★ CHECKED FIRST, before a single step is planned. A partial plan that
+    // looks complete is the thing this refusal exists to prevent.
+    if !m.templates.is_empty() {
+        return Err(PlanError::TemplatesUnsupported { count: m.templates.len() });
+    }
     let gen_dir = format!("{}/{generation}", m.secrets_mount_point);
     let mut steps = vec![Step::MakeGeneration { path: gen_dir.clone() }];
 
@@ -229,6 +286,19 @@ mod tests {
             Step::Chmod { mode, .. } => Some(*mode), _ => None }).collect();
         assert!(modes.contains(&0o400) && modes.contains(&0o440));
         assert!(!modes.contains(&CREATE_MODE), "the create mode is not a declared mode here");
+    }
+
+    #[test]
+    fn a_manifest_with_templates_is_refused_not_partially_planned() {
+        // plo's real manifest has FOUR. A planner that skipped them would
+        // place all 27 plain entries and leave four files missing, and every
+        // surface would report success.
+        let with_t = M.replace(
+            "\"keepGenerations\": 2,",
+            "\"keepGenerations\": 2, \"templates\": [{\"name\":\"t\",\"path\":\"/run/secrets/t\",\"content\":\"x\",\"mode\":\"0400\",\"owner\":null,\"group\":null,\"uid\":0,\"gid\":0}],",
+        );
+        let m: Manifest = serde_json::from_str(&with_t).expect("parse");
+        assert_eq!(plan(&m, 1), Err(PlanError::TemplatesUnsupported { count: 1 }));
     }
 
     #[test]

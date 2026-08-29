@@ -40,7 +40,7 @@ pub trait Fs {
 
     /// # Errors
     /// Implementation-defined I/O failure.
-    fn chown(&self, path: &str, owner: &str, group: &str) -> Result<(), String>;
+    fn chown(&self, path: &str, own: &crate::place::Ownership) -> Result<(), String>;
 
     /// # Errors
     /// Implementation-defined I/O failure.
@@ -140,8 +140,8 @@ pub fn apply<F: Fs, D: Decryptor>(
                     .map_err(|d| ApplyError::Fs { step: format!("write {path}"), detail: d })?;
                 written += 1;
             }
-            Step::Chown { path, owner, group } => {
-                fs.chown(path, owner, group).map_err(|d| ApplyError::Fs {
+            Step::Chown { path, own } => {
+                fs.chown(path, own).map_err(|d| ApplyError::Fs {
                     step: format!("chown {path}"),
                     detail: d,
                 })?;
@@ -208,7 +208,7 @@ mod tests {
     impl Fs for SpyFs {
         fn make_dir(&self, p: &str) -> Result<(), String> { self.note(&format!("mkdir {p}")) }
         fn write_restrictive(&self, p: &str, _c: &[u8]) -> Result<(), String> { self.note(&format!("write {p}")) }
-        fn chown(&self, p: &str, _o: &str, _g: &str) -> Result<(), String> { self.note(&format!("chown {p}")) }
+        fn chown(&self, p: &str, _o: &crate::place::Ownership) -> Result<(), String> { self.note(&format!("chown {p}")) }
         fn chmod(&self, p: &str, _m: u32) -> Result<(), String> { self.note(&format!("chmod {p}")) }
         fn swap_symlink(&self, l: &str, t: &str) -> Result<(), String> { self.note(&format!("swap {l}->{t}")) }
         fn remove_dir_all(&self, p: &str) -> Result<(), String> { self.note(&format!("rm {p}")) }
