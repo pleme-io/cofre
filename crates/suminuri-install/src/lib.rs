@@ -36,10 +36,12 @@
 //! map — the right outcome for the one place in this fleet where rolling our
 //! own crypto would be least defensible.
 
+pub mod apply;
 pub mod identity;
 pub mod manifest;
 pub mod place;
 
+pub use apply::{Applied, ApplyError, Decryptor, Fs, apply};
 pub use identity::{IdentityError, Source};
 pub use manifest::{Manifest, ManifestError, Secret};
 pub use place::{PlanError, Step, plan, prune};
