@@ -51,13 +51,48 @@ pub struct Secret {
     /// key-file group- and world-readable. Keeping it textual means the octal
     /// base is never inferred.
     pub mode: String,
-    pub owner: String,
-    pub group: String,
+    /// Owner NAME, or `None` when sops-nix expressed it numerically.
+    ///
+    /// ★ Measured on plo's live manifest: **16 of 27 entries carry
+    /// `"owner": null` with a numeric `uid`**. Requiring a String here made
+    /// the whole manifest unparseable — caught by the first dry-run against
+    /// real data, and not visible in the 1200-character prefix these types
+    /// were originally transcribed from.
+    pub owner: Option<String>,
+    /// Group NAME, or `None` — see [`Secret::owner`]. Null on the same 16.
+    pub group: Option<String>,
+    /// Numeric owner. The fallback when `owner` is null, and NOT merely a
+    /// cache of it: an entry may carry a uid for an account that has no name
+    /// yet, which is precisely the `neededForUsers` case.
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     /// Secrets needed before normal users exist get an earlier pass.
     #[serde(rename = "neededForUsers", default)]
     pub needed_for_users: bool,
+    #[serde(rename = "restartUnits", default)]
+    pub restart_units: Vec<String>,
+    #[serde(rename = "reloadUnits", default)]
+    pub reload_units: Vec<String>,
+}
+
+/// A file rendered from decrypted values.
+///
+/// ★ A FEATURE THE FIRST CUT MISSED ENTIRELY. plo's manifest carries **four**
+/// templates, and a drop-in that ignored them would place every plain secret
+/// correctly and silently omit four files — cloudflared's credentials among
+/// them. Found by the first dry-run against a real manifest, not by reading
+/// upstream's structs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Template {
+    pub name: String,
+    pub path: String,
+    /// The file body, carrying `<SOPS:hash:PLACEHOLDER>` markers.
+    pub content: String,
+    pub mode: String,
+    pub owner: Option<String>,
+    pub group: Option<String>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
     #[serde(rename = "restartUnits", default)]
     pub restart_units: Vec<String>,
     #[serde(rename = "reloadUnits", default)]
@@ -97,6 +132,17 @@ pub struct Manifest {
     pub user_mode: bool,
     #[serde(rename = "useTmpfs", default)]
     pub use_tmpfs: bool,
+    /// Files rendered by substituting decrypted values into a body.
+    #[serde(default)]
+    pub templates: Vec<Template>,
+    /// secret name -> the `<SOPS:…:PLACEHOLDER>` marker standing for it.
+    ///
+    /// ★ The substitution table. A template's body is rendered by replacing
+    /// each marker with that secret's plaintext, so a template depends on
+    /// secrets that must already be decrypted — which is why templates are
+    /// rendered AFTER the entries, never interleaved.
+    #[serde(rename = "placeholderBySecretName", default)]
+    pub placeholder_by_secret_name: std::collections::BTreeMap<String, String>,
 }
 
 /// Errors reading a manifest.
