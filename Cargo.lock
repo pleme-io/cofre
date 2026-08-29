@@ -2722,6 +2722,8 @@ version = "0.1.16"
 dependencies = [
  "age",
  "clap",
+ "rand_core 0.6.4",
+ "ssh-key",
  "suminuri-wire",
  "suminuri-yaml",
  "thiserror 2.0.18",
