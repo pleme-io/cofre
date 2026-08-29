@@ -121,7 +121,10 @@ mod tests {
         // Upstream's order. A node holding both must behave identically, or a
         // rebuild that used to succeed starts failing on a file whose
         // recipients include only one of them.
-        let m = manifest(Some("/var/lib/sops-nix/key.txt"), &["/etc/ssh/ssh_host_ed25519_key"]);
+        let m = manifest(
+            Some("/var/lib/sops-nix/key.txt"),
+            &["/etc/ssh/ssh_host_ed25519_key"],
+        );
         let c = candidates(&m);
         assert_eq!(c.len(), 2);
         assert!(matches!(c[0], Source::AgeKeyFile(_)));
@@ -131,7 +134,10 @@ mod tests {
     #[test]
     fn plos_real_shape_resolves_to_the_ssh_host_key() {
         // plo's live manifest: an age key file AND the ed25519 host key.
-        let m = manifest(Some("/var/lib/sops-nix/key.txt"), &["/etc/ssh/ssh_host_ed25519_key"]);
+        let m = manifest(
+            Some("/var/lib/sops-nix/key.txt"),
+            &["/etc/ssh/ssh_host_ed25519_key"],
+        );
         let c = candidates(&m);
         assert_eq!(
             c[1].path(),
@@ -163,11 +169,8 @@ mod tests {
         // guard exists to stop, and a guard that yields to convenience is not
         // a guard. Generating in-test costs one dev-dependency and commits
         // nothing.
-        let key = ssh_key::PrivateKey::random(
-            &mut rand_core::OsRng,
-            ssh_key::Algorithm::Ed25519,
-        )
-        .expect("generate an ed25519 key");
+        let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .expect("generate an ed25519 key");
         let pem = key
             .to_openssh(ssh_key::LineEnding::LF)
             .expect("encode OpenSSH PEM");
@@ -199,16 +202,16 @@ mod tests {
         // fixture from the real thing), and truncating a REAL key is the
         // actual failure being modelled — a synthetic prefix might fail at a
         // different stage than a genuine half-written file does.
-        let key = ssh_key::PrivateKey::random(
-            &mut rand_core::OsRng,
-            ssh_key::Algorithm::Ed25519,
-        )
-        .expect("generate");
+        let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .expect("generate");
         let pem = key.to_openssh(ssh_key::LineEnding::LF).expect("encode");
         let half = &pem.as_bytes()[..pem.len() / 2];
 
         let r = age::ssh::Identity::from_buffer(std::io::BufReader::new(half), None);
-        assert!(r.is_err(), "a half-written key must Err, not panic or parse");
+        assert!(
+            r.is_err(),
+            "a half-written key must Err, not panic or parse"
+        );
     }
 
     #[test]
@@ -218,12 +221,12 @@ mod tests {
         // that a stated property — if either is ever changed to write a
         // tempfile, this comment is what should stop it.
         let before = std::env::temp_dir();
-        let key = ssh_key::PrivateKey::random(
-            &mut rand_core::OsRng,
-            ssh_key::Algorithm::Ed25519,
-        )
-        .expect("generate");
+        let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .expect("generate");
         drop(key);
-        assert!(before.exists(), "no key test may depend on, or leave, an on-disk artifact");
+        assert!(
+            before.exists(),
+            "no key test may depend on, or leave, an on-disk artifact"
+        );
     }
 }

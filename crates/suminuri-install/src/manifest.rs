@@ -186,7 +186,10 @@ impl Manifest {
     /// The secrets placed in the normal pass.
     #[must_use]
     pub fn main_pass(&self) -> Vec<&Secret> {
-        self.secrets.iter().filter(|s| !s.needed_for_users).collect()
+        self.secrets
+            .iter()
+            .filter(|s| !s.needed_for_users)
+            .collect()
     }
 
     /// Every distinct sops file this manifest reads.
