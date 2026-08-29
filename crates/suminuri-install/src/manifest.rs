@@ -323,3 +323,202 @@ mod tests {
         assert_eq!(m.secrets[1].restart_units, vec!["x.service"]);
     }
 }
+
+impl Manifest {
+    /// Every absolute path this manifest will cause a program to touch.
+    ///
+    /// ★ The point is that this is FOUR sources, not two. `secretsMountPoint`
+    /// and `symlinkPath` are the ones a reader thinks of; each secret and each
+    /// template carries its own independent absolute `path`, and those are the
+    /// ones that reach production when a harness "sandboxes" the first two.
+    #[must_use]
+    pub fn all_paths(&self) -> Vec<&str> {
+        let mut v = vec![
+            self.secrets_mount_point.as_str(),
+            self.symlink_path.as_str(),
+        ];
+        v.extend(self.secrets.iter().map(|s| s.path.as_str()));
+        v.extend(self.templates.iter().map(|t| t.path.as_str()));
+        v
+    }
+
+    /// Verify EVERY path lies under `root`, returning the escapees.
+    ///
+    /// ── ★ WHY THIS IS A LIBRARY FUNCTION AND NOT A COMMENT ─────────────────
+    ///
+    /// On rio (2026-08-29) a differential harness sandboxed a real manifest by
+    /// rewriting `secretsMountPoint` and `symlinkPath`, and ASSERTED both
+    /// rewrites. It was not sandboxed: every secret kept its own absolute
+    /// `path`, so upstream wrote into the scratch tree and simultaneously
+    /// repointed the live `/run/secrets/*` symlinks at it. Teardown deleted the
+    /// scratch tree; 27 production symlinks went dangling; the node's GitOps
+    /// reconciler — which reads its GitHub token through one of them — failed
+    /// every tick for three and a half hours while reporting `active`.
+    ///
+    /// The assertion was not missing. It was *incomplete*, and an incomplete
+    /// guard reads exactly like a complete one. So the check belongs here,
+    /// derived from the manifest's own structure, rather than in each harness
+    /// where it is re-remembered field by field.
+    ///
+    /// # Errors
+    /// Returns every path not under `root`. An empty `Err` is impossible: the
+    /// result is `Ok` precisely when nothing escapes.
+    pub fn escapes_sandbox(&self, root: &str) -> Result<(), Vec<String>> {
+        let bad: Vec<String> = self
+            .all_paths()
+            .into_iter()
+            .filter(|p| !p.starts_with(root))
+            .map(ToOwned::to_owned)
+            .collect();
+        if bad.is_empty() { Ok(()) } else { Err(bad) }
+    }
+}
+
+#[cfg(test)]
+mod sandboxing_tests {
+    use super::*;
+
+    /// ★ THE INCIDENT THIS PINS (rio, 2026-08-29).
+    ///
+    /// A differential harness "sandboxed" a real manifest by rewriting
+    /// `secretsMountPoint` and `symlinkPath` to scratch paths, asserted both
+    /// rewrites, and ran upstream `sops-install-secrets` against it.
+    ///
+    /// It was not sandboxed. **Every secret carries its OWN absolute `path`**,
+    /// which the rewrite never touched — so upstream wrote its files into the
+    /// scratch tree AND repointed the live `/run/secrets/*` symlinks at them.
+    /// Because `/run/secrets` is itself a symlink into the live generation,
+    /// those writes landed *inside* production. Teardown then deleted the
+    /// scratch tree, leaving 27 dangling symlinks, which killed the node's
+    /// GitOps reconciler for three and a half hours — it reads its GitHub
+    /// token through one of them, while reporting `active` the whole time.
+    ///
+    /// The lesson is not "be careful". It is that **`secretsMountPoint` and a
+    /// secret's `path` are independent fields**, so confining one confines
+    /// nothing. A harness must rewrite EVERY path and then assert that no
+    /// production prefix survives anywhere in the document — fail-closed on the
+    /// whole JSON, not on the two fields someone remembered.
+    #[test]
+    fn a_secret_path_is_independent_of_the_mount_point() {
+        let j = r#"{
+          "secretsMountPoint": "/tmp/scratch/secrets.d",
+          "symlinkPath": "/tmp/scratch/secrets",
+          "keepGenerations": 1,
+          "secrets": [{
+            "name": "token", "key": "github/token",
+            "path": "/run/secrets/github/pleme-io/token",
+            "sopsFile": "/etc/secrets.yaml", "format": "yaml", "mode": "0400"
+          }],
+          "templates": []
+        }"#;
+        let m: Manifest = serde_json::from_str(j).expect("parses");
+
+        // Both "sandbox" fields point at scratch...
+        assert!(m.secrets_mount_point.starts_with("/tmp/scratch"));
+        assert!(m.symlink_path.starts_with("/tmp/scratch"));
+
+        // ...and the secret STILL points into production. This is the whole
+        // finding: the document can look sandboxed and not be.
+        assert_eq!(m.secrets[0].path, "/run/secrets/github/pleme-io/token");
+        assert!(
+            !m.secrets[0].path.starts_with(&m.secrets_mount_point),
+            "a secret path is NOT derived from the mount point — confining \
+             the mount point does not confine the secret"
+        );
+    }
+
+    /// The guard a harness must actually apply: scan the WHOLE document.
+    ///
+    /// Written as a test rather than a comment because the failing version of
+    /// this check was "assert the two fields I rewrote are rewritten", which
+    /// passes on a document that is still pointed at production.
+    #[test]
+    fn the_only_sound_sandbox_check_scans_every_path() {
+        let mut m: Manifest = serde_json::from_str(
+            r#"{
+              "secretsMountPoint": "/run/secrets.d", "symlinkPath": "/run/secrets",
+              "keepGenerations": 1,
+              "secrets": [{
+                "name": "t", "key": "k", "path": "/run/secrets/t",
+                "sopsFile": "/etc/s.yaml", "format": "yaml", "mode": "0400"
+              }],
+              "templates": []
+            }"#,
+        )
+        .expect("parses");
+
+        let sandboxed = |m: &Manifest| {
+            let mut paths = vec![m.secrets_mount_point.clone(), m.symlink_path.clone()];
+            paths.extend(m.secrets.iter().map(|s| s.path.clone()));
+            paths.extend(m.templates.iter().map(|t| t.path.clone()));
+            paths.iter().all(|p| p.starts_with("/tmp/sbx"))
+        };
+
+        // The partial rewrite -- exactly what was done on rio -- must FAIL.
+        m.secrets_mount_point = "/tmp/sbx/secrets.d".into();
+        m.symlink_path = "/tmp/sbx/secrets".into();
+        assert!(
+            !sandboxed(&m),
+            "rewriting only the mount point and symlink must NOT read as sandboxed"
+        );
+
+        // Only the complete rewrite passes.
+        m.secrets[0].path = "/tmp/sbx/secrets/t".into();
+        assert!(sandboxed(&m));
+    }
+}
+
+#[cfg(test)]
+mod sandbox_guard_tests {
+    use super::*;
+
+    fn real() -> Manifest {
+        serde_json::from_str(
+            r#"{
+              "secretsMountPoint": "/run/secrets.d", "symlinkPath": "/run/secrets",
+              "keepGenerations": 1,
+              "secrets": [{ "name":"t","key":"k","path":"/run/secrets/t",
+                            "sopsFile":"/etc/s.yaml","format":"yaml","mode":"0400" }],
+              "templates": [{ "name":"c","path":"/run/secrets/rendered/c",
+                              "content":"x","mode":"0400" }]
+            }"#,
+        )
+        .expect("parses")
+    }
+
+    #[test]
+    fn all_paths_counts_four_sources_not_two() {
+        // If this ever returns 2, someone has "simplified" it back to the bug.
+        assert_eq!(real().all_paths().len(), 4);
+    }
+
+    #[test]
+    fn a_partial_rewrite_is_reported_as_an_escape() {
+        // Exactly the rio mistake: the two obvious fields moved, the rest did not.
+        let mut m = real();
+        m.secrets_mount_point = "/tmp/sbx/secrets.d".into();
+        m.symlink_path = "/tmp/sbx/secrets".into();
+        let bad = m.escapes_sandbox("/tmp/sbx").expect_err("must refuse");
+        assert_eq!(bad.len(), 2, "both per-item paths still escape: {bad:?}");
+        assert!(bad.iter().any(|p| p == "/run/secrets/t"), "{bad:?}");
+        assert!(bad.iter().any(|p| p.contains("rendered")), "{bad:?}");
+    }
+
+    #[test]
+    fn a_complete_rewrite_passes() {
+        let mut m = real();
+        m.secrets_mount_point = "/tmp/sbx/secrets.d".into();
+        m.symlink_path = "/tmp/sbx/secrets".into();
+        m.secrets[0].path = "/tmp/sbx/secrets/t".into();
+        m.templates[0].path = "/tmp/sbx/secrets/rendered/c".into();
+        assert!(m.escapes_sandbox("/tmp/sbx").is_ok());
+    }
+
+    #[test]
+    fn an_untouched_manifest_escapes_everything() {
+        // Anti-vacuity: the guard must fire on the unmodified real shape,
+        // otherwise a bug that made it always-Ok would look like success.
+        let bad = real().escapes_sandbox("/tmp/sbx").expect_err("must refuse");
+        assert_eq!(bad.len(), 4);
+    }
+}
