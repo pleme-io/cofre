@@ -30,10 +30,14 @@
 //!
 //! **Manifest layer only.** The typed contract with sops-nix's JSON, its two
 //! placement passes, and the octal-mode trap. Decryption reuses
-//! `suminuri`; the remaining gap is **ssh-ed25519 → age identity derivation**,
-//! which suminuri does not do today (it accepts age key files). That gap is
-//! named rather than stubbed.
+//! `suminuri`. The ssh-ed25519 → age gap named in the first commit is
+//! **closed**: `age 0.11` already implements the conversion behind its `ssh`
+//! feature, so it took a feature flag rather than a hand-written birational
+//! map — the right outcome for the one place in this fleet where rolling our
+//! own crypto would be least defensible.
 
+pub mod identity;
 pub mod manifest;
 
+pub use identity::{IdentityError, Source};
 pub use manifest::{Manifest, ManifestError, Secret};
