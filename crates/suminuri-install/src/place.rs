@@ -33,6 +33,19 @@ use crate::manifest::{Manifest, Secret};
 /// One filesystem action, in the order it must happen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
+    /// Ensure the secrets mount point is a **ramfs**, mounting one if not.
+    ///
+    /// ★ ramfs, NOT tmpfs, and the distinction is the security property:
+    /// **tmpfs can be swapped to disk; ramfs cannot.** Decrypted secrets in a
+    /// tmpfs may be paged to persistent storage under memory pressure and
+    /// survive a reboot in swap. Upstream mounts
+    /// `ramfs (rw,nosuid,nodev,noexec,relatime,mode=751)` and so must this.
+    ///
+    /// Discovered the way it had to be: the content differential passed
+    /// byte-for-byte while this was still missing, and it only surfaced when
+    /// cleanup hit `Device or resource busy` on upstream's tree. A comparison
+    /// of FILES cannot see the filesystem they sit on.
+    EnsureRamfs { path: String },
     /// Create the generation directory.
     MakeGeneration { path: String },
     /// Write a secret's plaintext, restrictively.
@@ -163,7 +176,13 @@ fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
 /// planned generation is the thing rule 2 exists to prevent.
 pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
     let gen_dir = format!("{}/{generation}", m.secrets_mount_point);
-    let mut steps = vec![Step::MakeGeneration { path: gen_dir.clone() }];
+    // ★ THE MOUNT COMES FIRST. Creating the generation directory on a plain
+    // filesystem and mounting afterwards would hide the already-written
+    // secrets under the mount — present on disk, invisible to every reader.
+    let mut steps = vec![
+        Step::EnsureRamfs { path: m.secrets_mount_point.clone() },
+        Step::MakeGeneration { path: gen_dir.clone() },
+    ];
 
     // ★ USER PASS FIRST. A secret a user's own creation depends on cannot be
     // chowned to that user, so these are placed before the main set.
@@ -257,6 +276,16 @@ mod tests {
             }
         }
         assert!(seen_chown, "no chown/chmod pair found");
+    }
+
+    #[test]
+    fn the_ramfs_mount_precedes_the_generation_directory() {
+        // Creating the directory first and mounting over it would HIDE the
+        // secrets already written there — present on disk, invisible to every
+        // reader, and the run would report success.
+        let steps = plan(&m(), 7).expect("plan");
+        assert!(matches!(steps[0], Step::EnsureRamfs { .. }), "mount must be first");
+        assert!(matches!(steps[1], Step::MakeGeneration { .. }));
     }
 
     #[test]

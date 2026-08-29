@@ -44,6 +44,25 @@ fn gid_of(name: &str) -> Option<u32> {
 }
 
 impl Fs for RealFs {
+    fn ensure_ramfs(&self, path: &str) -> Result<(), String> {
+        std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+
+        // ★ IDEMPOTENT. sops-install-secrets runs on EVERY rebuild, and
+        // mounting a second ramfs over the first would stack them — the old
+        // generations still on disk underneath, invisible, and never pruned.
+        // So an existing ramfs here is success, not something to redo.
+        if already_ramfs(path) {
+            return Ok(());
+        }
+
+        // ★ ramfs, NOT tmpfs. tmpfs can be SWAPPED to disk; ramfs cannot.
+        // Decrypted secrets in a tmpfs may be paged to persistent storage
+        // under memory pressure and survive a reboot in swap. The flags match
+        // what upstream mounts, measured on plo:
+        //   rw,nosuid,nodev,noexec,relatime,mode=751
+        mount_ramfs(path)
+    }
+
     fn make_dir(&self, path: &str) -> Result<(), String> {
         std::fs::create_dir_all(path).map_err(|e| e.to_string())
     }
@@ -107,6 +126,63 @@ impl Fs for RealFs {
     fn remove_dir_all(&self, path: &str) -> Result<(), String> {
         std::fs::remove_dir_all(path).map_err(|e| e.to_string())
     }
+}
+
+/// Mount a ramfs at `path`.
+///
+/// ★ Linux-only, and ABSENT rather than stubbed elsewhere. A darwin build
+/// returning `Ok(())` would report a mounted ramfs where none exists, and the
+/// caller would then write decrypted secrets to a plain filesystem believing
+/// they were in unswappable memory. jikoku's clock arm is gated the same way
+/// and for the same reason: a stub that succeeds is worse than a build that
+/// cannot.
+#[cfg(target_os = "linux")]
+fn mount_ramfs(path: &str) -> Result<(), String> {
+    let src = std::ffi::CString::new("none").map_err(|e| e.to_string())?;
+    let target = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+    let fstype = std::ffi::CString::new("ramfs").map_err(|e| e.to_string())?;
+    let opts = std::ffi::CString::new("mode=751").map_err(|e| e.to_string())?;
+    // SAFETY: all four are valid NUL-terminated C strings outliving the call.
+    let r = unsafe {
+        libc::mount(
+            src.as_ptr(),
+            target.as_ptr(),
+            fstype.as_ptr(),
+            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RELATIME,
+            opts.as_ptr().cast(),
+        )
+    };
+    if r != 0 {
+        return Err(format!(
+            "mounting a ramfs at {path}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn mount_ramfs(path: &str) -> Result<(), String> {
+    Err(format!(
+        "cannot mount a ramfs at {path}: this platform has no ramfs, and reporting \
+         success would place decrypted secrets on a swappable filesystem"
+    ))
+}
+
+/// Is `path` already a ramfs mount point?
+///
+/// ★ Read from `/proc/mounts` rather than `statfs`: the fs TYPE is what
+/// matters and `statfs`'s `f_type` for ramfs is the same magic as tmpfs on
+/// some kernels, so the cheap check is the wrong one.
+fn already_ramfs(path: &str) -> bool {
+    let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
+        return false;
+    };
+    mounts.lines().any(|l| {
+        let mut f = l.split_whitespace();
+        let (_src, target, fstype) = (f.next(), f.next(), f.next());
+        target == Some(path) && fstype == Some("ramfs")
+    })
 }
 
 /// Decrypts through suminuri, caching one decrypted tree per file.
@@ -225,6 +301,14 @@ mod tests {
         let tree = nested();
         let v = at_path(&tree, "attic/jwt");
         assert!(matches!(v, Some(Value::Mapping(_))), "must not be mistaken for a scalar");
+    }
+
+    #[test]
+    fn already_ramfs_reads_proc_mounts_and_is_false_for_a_plain_path() {
+        // /tmp is a real path and is not a ramfs on any fleet node; a `true`
+        // here would mean the mount is skipped and secrets land on whatever
+        // filesystem happens to be there.
+        assert!(!already_ramfs("/definitely/not/mounted/9f3c"));
     }
 
     #[test]

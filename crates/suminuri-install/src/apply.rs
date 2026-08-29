@@ -26,6 +26,12 @@ use crate::manifest::Manifest;
 
 /// Filesystem effects.
 pub trait Fs {
+    /// Ensure `path` is a ramfs mount, mounting one if it is not already.
+    ///
+    /// # Errors
+    /// Implementation-defined mount failure.
+    fn ensure_ramfs(&self, path: &str) -> Result<(), String>;
+
     /// Create a directory and any missing parents.
     ///
     /// # Errors
@@ -137,6 +143,10 @@ pub fn apply<F: Fs, D: Decryptor>(
 
     for step in &steps {
         match step {
+            Step::EnsureRamfs { path } => fs.ensure_ramfs(path).map_err(|d| ApplyError::Fs {
+                step: format!("ensure ramfs at {path}"),
+                detail: d,
+            })?,
             Step::MakeGeneration { path } => fs.make_dir(path).map_err(|d| ApplyError::Fs {
                 step: format!("mkdir {path}"),
                 detail: d,
@@ -244,6 +254,7 @@ mod tests {
         }
     }
     impl Fs for SpyFs {
+        fn ensure_ramfs(&self, p: &str) -> Result<(), String> { self.note(&format!("ramfs {p}")) }
         fn make_dir(&self, p: &str) -> Result<(), String> { self.note(&format!("mkdir {p}")) }
         fn write_restrictive(&self, p: &str, _c: &[u8]) -> Result<(), String> { self.note(&format!("write {p}")) }
         fn chown(&self, p: &str, _o: &crate::place::Ownership) -> Result<(), String> { self.note(&format!("chown {p}")) }
