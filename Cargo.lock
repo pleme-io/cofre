@@ -466,7 +466,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cofre"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "akeyless-api",
  "blake3",
@@ -485,15 +485,15 @@ dependencies = [
 
 [[package]]
 name = "cofre-fs"
-version = "0.1.19"
+version = "0.1.20"
 
 [[package]]
 name = "cofre-secret"
-version = "0.1.19"
+version = "0.1.20"
 
 [[package]]
 name = "cofre-types"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "gen-platform",
  "gen-types",
@@ -2718,7 +2718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suminuri"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "age",
  "clap",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "suminuri-install"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "age",
  "libc",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "suminuri-wire"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "suminuri-yaml"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "libyaml-safer",
  "thiserror 2.0.18",
