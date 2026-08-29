@@ -43,6 +43,18 @@ pub enum Step {
     /// Set ownership, then permissions. Both, in this order, per entry.
     Chown { path: String, own: Ownership },
     Chmod { path: String, mode: u32 },
+    /// Render a template body and write it.
+    ///
+    /// ★ Carries the SECRETS IT REFERENCES, not just its content. That makes
+    /// "a template can only be rendered once its secrets are decrypted" a
+    /// property visible in the plan rather than an ordering the executor has
+    /// to remember.
+    RenderTemplate {
+        path: String,
+        name: String,
+        content: String,
+        references: Vec<String>,
+    },
     /// Point `/run/secrets` at the completed generation, atomically.
     SwapSymlink { link: String, target: String },
     /// Remove a generation older than `keepGenerations`.
@@ -74,17 +86,6 @@ pub enum Ownership {
 pub enum PlanError {
     /// An entry names neither an owner nor a uid.
     NoOwnership { entry: String },
-    /// The manifest carries templates, which this planner does not render yet.
-    ///
-    /// ★ A REFUSAL, NOT AN OMISSION. plo's manifest has four templates, and a
-    /// planner that quietly skipped them would place all 27 plain entries
-    /// correctly and leave four files missing — including cloudflared's
-    /// credentials. Every consumer would see a working install and a service
-    /// that cannot start, with nothing connecting the two.
-    ///
-    /// This is the `kotae` rule applied to a planner: an unimplemented
-    /// capability must not render as a successful plan.
-    TemplatesUnsupported { count: usize },
     /// An entry's mode string was not octal.
     ///
     /// ★ The field is `entry`, not the obvious alternative. It holds a NAME,
@@ -101,11 +102,6 @@ impl std::fmt::Display for PlanError {
             Self::BadMode { entry, mode } => {
                 write!(f, "entry {entry}: mode {mode:?} is not octal")
             }
-            Self::TemplatesUnsupported { count } => write!(
-                f,
-                "this manifest carries {count} template(s), which are not rendered yet — \
-                 refusing rather than installing an incomplete generation"
-            ),
             Self::NoOwnership { entry } => write!(
                 f,
                 "entry {entry}: neither an owner name nor a uid — refusing rather than \
@@ -120,6 +116,15 @@ impl std::fmt::Display for PlanError {
 ///
 /// ★ 0600 root-only. Not the declared mode: see ordering rule 1.
 pub const CREATE_MODE: u32 = 0o600;
+
+/// A template's ownership, same two forms as an entry's.
+fn template_ownership(t: &crate::manifest::Template) -> Result<Ownership, PlanError> {
+    match (&t.owner, &t.group, t.uid, t.gid) {
+        (Some(o), Some(g), _, _) => Ok(Ownership::ByName { owner: o.clone(), group: g.clone() }),
+        (_, _, Some(uid), Some(gid)) => Ok(Ownership::ByIds { uid, gid }),
+        _ => Err(PlanError::NoOwnership { entry: t.name.clone() }),
+    }
+}
 
 /// Which ownership form an entry uses.
 fn ownership_of(s: &Secret) -> Result<Ownership, PlanError> {
@@ -157,11 +162,6 @@ fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
 /// abandoned entirely rather than skipping that secret, because a partially
 /// planned generation is the thing rule 2 exists to prevent.
 pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
-    // ★ CHECKED FIRST, before a single step is planned. A partial plan that
-    // looks complete is the thing this refusal exists to prevent.
-    if !m.templates.is_empty() {
-        return Err(PlanError::TemplatesUnsupported { count: m.templates.len() });
-    }
     let gen_dir = format!("{}/{generation}", m.secrets_mount_point);
     let mut steps = vec![Step::MakeGeneration { path: gen_dir.clone() }];
 
@@ -174,8 +174,27 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
         steps.extend(steps_for(s, &gen_dir)?);
     }
 
-    // ★ LAST. Nothing points at the generation until every secret in it
-    // succeeded.
+    // ★ TEMPLATES AFTER ENTRIES, because a template's body is rendered FROM
+    // decrypted values — the ordering is derived from the dependency, not
+    // chosen. `references` makes that dependency visible in the plan.
+    for t in &m.templates {
+        let mode = t.mode_octal().map_err(|md| PlanError::BadMode {
+            entry: t.name.clone(),
+            mode: md.to_owned(),
+        })?;
+        let path = format!("{gen_dir}/{}", t.name);
+        steps.push(Step::RenderTemplate {
+            path: path.clone(),
+            name: t.name.clone(),
+            content: t.content.clone(),
+            references: crate::template::referenced(&t.content, &m.placeholder_by_secret_name),
+        });
+        steps.push(Step::Chown { path: path.clone(), own: template_ownership(t)? });
+        steps.push(Step::Chmod { path, mode });
+    }
+
+    // ★ LAST. Nothing points at the generation until every entry AND every
+    // template in it succeeded.
     steps.push(Step::SwapSymlink {
         link: m.symlink_path.clone(),
         target: gen_dir,
@@ -289,16 +308,44 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_with_templates_is_refused_not_partially_planned() {
-        // plo's real manifest has FOUR. A planner that skipped them would
-        // place all 27 plain entries and leave four files missing, and every
-        // surface would report success.
+    fn templates_are_planned_after_every_entry() {
+        // Not a convention -- a DERIVED ordering. A template's body is
+        // rendered FROM decrypted values, so it cannot precede the entries it
+        // names. An earlier cut refused templates outright rather than
+        // planning them, which was the honest state at the time; this asserts
+        // the ordering now that they are real.
         let with_t = M.replace(
             "\"keepGenerations\": 2,",
             "\"keepGenerations\": 2, \"templates\": [{\"name\":\"t\",\"path\":\"/run/secrets/t\",\"content\":\"x\",\"mode\":\"0400\",\"owner\":null,\"group\":null,\"uid\":0,\"gid\":0}],",
         );
         let m: Manifest = serde_json::from_str(&with_t).expect("parse");
-        assert_eq!(plan(&m, 1), Err(PlanError::TemplatesUnsupported { count: 1 }));
+        let steps = plan(&m, 1).expect("templates must plan");
+
+        let last_write = steps
+            .iter()
+            .rposition(|s| matches!(s, Step::Write { .. }))
+            .expect("an entry write");
+        let render = steps
+            .iter()
+            .position(|s| matches!(s, Step::RenderTemplate { .. }))
+            .expect("a template render");
+        assert!(render > last_write, "a template was planned before an entry it may reference");
+        assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })), "swap still last");
+    }
+
+    #[test]
+    fn a_template_gets_the_same_chown_then_chmod_treatment() {
+        // The ownership window is not less dangerous for a rendered file --
+        // cloudflared's credentials are one of plo's four.
+        let with_t = M.replace(
+            "\"keepGenerations\": 2,",
+            "\"keepGenerations\": 2, \"templates\": [{\"name\":\"t\",\"path\":\"/run/secrets/t\",\"content\":\"x\",\"mode\":\"0400\",\"owner\":null,\"group\":null,\"uid\":0,\"gid\":0}],",
+        );
+        let m: Manifest = serde_json::from_str(&with_t).expect("parse");
+        let steps = plan(&m, 1).expect("plan");
+        let r = steps.iter().position(|s| matches!(s, Step::RenderTemplate { .. })).expect("render");
+        assert!(matches!(steps[r + 1], Step::Chown { .. }), "chown must follow the render");
+        assert!(matches!(steps[r + 2], Step::Chmod { .. }), "chmod must follow the chown");
     }
 
     #[test]
