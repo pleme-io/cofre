@@ -38,6 +38,8 @@
 
 pub mod identity;
 pub mod manifest;
+pub mod place;
 
 pub use identity::{IdentityError, Source};
 pub use manifest::{Manifest, ManifestError, Secret};
+pub use place::{PlanError, Step, plan, prune};
