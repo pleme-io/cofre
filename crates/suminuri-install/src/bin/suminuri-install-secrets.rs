@@ -14,13 +14,16 @@ use suminuri_install::manifest::Manifest;
 use suminuri_install::place::plan;
 use suminuri_install::real::{RealFs, SuminuriDecryptor};
 
+/// One string, two consumers: `--help` prints it to stdout and exits 0, a
+/// missing manifest prints it to stderr and exits 1. Written once so the two
+/// cannot drift into describing different flags.
+const USAGE: &str = "usage: suminuri-install-secrets [--dry-run] <manifest.json>\n\
+     \n\
+     The sops-install-secrets drop-in. --dry-run prints the plan and\n\
+     touches nothing.";
+
 fn usage() -> ExitCode {
-    eprintln!(
-        "usage: suminuri-install-secrets [--dry-run] <manifest.json>\n\
-         \n\
-         The sops-install-secrets drop-in. --dry-run prints the plan and\n\
-         touches nothing."
-    );
+    eprintln!("{USAGE}");
     ExitCode::FAILURE
 }
 
@@ -38,6 +41,22 @@ fn generation() -> u64 {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // ★ ASKING FOR HELP IS A SUCCESS. Without this, `--help` starts with `--`,
+    // so it is not taken as the manifest path, falls through to usage(), and
+    // exits 1 -- a question answered with a failure code.
+    //
+    // Sibling of the defect that produced `shikumi::daemon`: there, three
+    // daemons ignored `--help` entirely and started. Here it is answered but
+    // graded wrong. Both come from argv handling written as an afterthought
+    // around the real work, and both matter because a wrapper reads the code,
+    // not the text: an activation script running this under `set -e` would
+    // abort on a help invocation.
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+
     let dry = args.iter().any(|a| a == "--dry-run");
     let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
         return usage();
