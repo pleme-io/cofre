@@ -182,7 +182,13 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
             entry: t.name.clone(),
             mode: md.to_owned(),
         })?;
-        let path = format!("{gen_dir}/{}", t.name);
+        // ★ `rendered/`, MEASURED not guessed. Upstream nests templates one
+        // level down; a differential against plo's real manifest showed 27/27
+        // secrets and 4/4 template CONTENTS byte-identical with the only
+        // divergence being this directory. Placing them at the top level
+        // would leave every consumer's declared `path` symlink pointing at
+        // nothing — a working install with four dead files.
+        let path = format!("{gen_dir}/rendered/{}", t.name);
         steps.push(Step::RenderTemplate {
             path: path.clone(),
             name: t.name.clone(),
@@ -346,6 +352,10 @@ mod tests {
         let r = steps.iter().position(|s| matches!(s, Step::RenderTemplate { .. })).expect("render");
         assert!(matches!(steps[r + 1], Step::Chown { .. }), "chown must follow the render");
         assert!(matches!(steps[r + 2], Step::Chmod { .. }), "chmod must follow the chown");
+        // ★ And it lands under rendered/, which is where upstream puts it —
+        // established by differential, not by reading upstream's source.
+        let Step::RenderTemplate { path, .. } = &steps[r] else { panic!("render") };
+        assert!(path.contains("/rendered/"), "templates nest under rendered/: {path}");
     }
 
     #[test]

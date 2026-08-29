@@ -144,8 +144,16 @@ impl Decryptor for SuminuriDecryptor {
     fn extract(&self, sops_file: &str, key: &str) -> Result<Vec<u8>, String> {
         let mut cache = self.cache.lock().map_err(|_| "cache poisoned".to_string())?;
         if !cache.contains_key(sops_file) {
+            // ★ `load_encrypted` takes the file's CONTENT, not its path.
+            // Passing the path parses the FILENAME as YAML, which has no
+            // `sops:` block — so it reports "not encrypted", which is a true
+            // statement about the wrong input. Caught by the first
+            // differential run against plo, not by any unit test here,
+            // because every unit test built its tree in memory.
+            let raw = std::fs::read_to_string(sops_file)
+                .map_err(|e| format!("read {sops_file}: {e}"))?;
             let mut file =
-                SopsFile::load_encrypted(sops_file).map_err(|e| format!("load: {e}"))?;
+                SopsFile::load_encrypted(&raw).map_err(|e| format!("load: {e}"))?;
             let data_key = file
                 .data_key(&self.identities)
                 .map_err(|e| format!("no usable identity ({} held): {e}", self.identities.len()))?;
