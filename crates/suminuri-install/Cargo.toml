@@ -14,6 +14,19 @@ description = "suminuri-install — the sops-install-secrets drop-in: parse the 
 # hand -- which is the right outcome for the one place in this fleet where
 # rolling our own would be least defensible.
 age = { version = "0.11", features = ["ssh", "armor"] }
+
+# ★ The decryptor is suminuri's, not a second implementation. suminuri owns the
+# wire format with a green byte-differential against upstream sops over the
+# real secrets.yaml; re-deriving any of it here would create a second answer to
+# a question that already has one.
+suminuri = { path = "../suminuri", version = "0.1.14" }
+suminuri-yaml = { path = "../suminuri-yaml", version = "0.1.14" }
+suminuri-wire = { path = "../suminuri-wire", version = "0.1.14" }
+
+# libc ONLY for name->uid/gid lookup and chown. std has no chown-by-name, and
+# resolving a name to an id is exactly the kind of thing a shell-out would do
+# badly (parsing `id -u` output). One module, behind the Fs trait.
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

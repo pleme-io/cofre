@@ -40,6 +40,7 @@ pub mod apply;
 pub mod identity;
 pub mod manifest;
 pub mod place;
+pub mod real;
 
 pub use apply::{Applied, ApplyError, Decryptor, Fs, apply};
 pub use identity::{IdentityError, Source};
