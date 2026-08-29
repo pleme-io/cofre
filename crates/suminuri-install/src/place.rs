@@ -95,6 +95,30 @@ pub enum Step {
         content: String,
         references: Vec<String>,
     },
+    /// Link an entry whose declared `path` lies OUTSIDE `symlinkPath`.
+    ///
+    /// ★ WHY THIS EXISTS (zek, 2026-08-29). An entry whose `path` is inside
+    /// `symlinkPath` needs no link: it resolves through the generation symlink
+    /// for free. An entry whose path is elsewhere -- zek's `kubeconfig-rio`
+    /// template declares `/home/luis/.kube/configs/rio` -- resolves through
+    /// nothing, and without this step it is simply never placed. The drop-in
+    /// shipped that gap; a differential against upstream on zek's real manifest
+    /// is what surfaced it, as the single entry `only upstream`.
+    ///
+    /// ★ THE TARGET IS THE STABLE PATH, NOT THE GENERATION. Measured on zek:
+    ///
+    /// ```text
+    /// /home/luis/.kube/configs/rio -> /run/secrets/rendered/kubeconfig-rio
+    /// ```
+    ///
+    /// Pointing at `{gen_dir}/...` instead would work exactly until the
+    /// generation is reaped, then break with the file still present one
+    /// directory over. The indirection through `symlinkPath` is what makes the
+    /// link survive rotation.
+    LinkOutOfTree {
+        link: String,
+        target: String,
+    },
     /// Point `/run/secrets` at the completed generation, atomically.
     SwapSymlink {
         link: String,
@@ -124,6 +148,21 @@ pub enum Ownership {
     /// account that does not exist yet, which is exactly the `neededForUsers`
     /// case this installer places in an earlier pass.
     ByIds { uid: u32, gid: u32 },
+}
+
+/// Does this entry need an explicit link, and if so where?
+///
+/// `Some(path)` when the declared path lies outside `symlink_path`; `None` when
+/// it is inside, because an in-tree path resolves through the generation
+/// symlink already and adding a link would be a self-reference.
+///
+/// ★ The `/` in the prefix check is load-bearing: without it `/run/secrets-old`
+/// would count as inside `/run/secrets`, and a genuinely out-of-tree entry
+/// would be silently skipped -- the exact failure this function exists to fix,
+/// reintroduced by a sloppier test.
+fn out_of_tree_link(path: &str, symlink_path: &str) -> Option<String> {
+    let inside = path == symlink_path || path.starts_with(&format!("{symlink_path}/"));
+    if inside { None } else { Some(path.to_owned()) }
 }
 
 /// Errors building a plan.
@@ -307,6 +346,31 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
             });
         }
         steps.push(Step::Chmod { path, mode });
+    }
+
+    // ── ★ OUT-OF-TREE LINKS, before the swap ────────────────────────────────
+    //
+    // Ordered here rather than after the swap for two reasons. The swap must
+    // stay the last step (an invariant with its own test: nothing points at the
+    // generation until everything in it succeeded), and these links are safe
+    // early because their target is the STABLE `symlinkPath`, which already
+    // resolves to the previous generation. So a run that fails between here and
+    // the swap leaves a link pointing at the old file rather than at nothing.
+    for s in &m.secrets {
+        if let Some(link) = out_of_tree_link(&s.path, &m.symlink_path) {
+            steps.push(Step::LinkOutOfTree {
+                link,
+                target: format!("{}/{}", m.symlink_path, s.name),
+            });
+        }
+    }
+    for t in &m.templates {
+        if let Some(link) = out_of_tree_link(&t.path, &m.symlink_path) {
+            steps.push(Step::LinkOutOfTree {
+                link,
+                target: format!("{}/rendered/{}", m.symlink_path, t.name),
+            });
+        }
     }
 
     // ★ LAST. Nothing points at the generation until every entry AND every
@@ -629,5 +693,130 @@ mod tests {
         // A concurrent installer may have created one. Removing it would
         // delete secrets a process is about to be pointed at.
         assert_eq!(prune(&[1, 2, 9], 2, 1), vec![1]);
+    }
+}
+
+#[cfg(test)]
+mod out_of_tree_tests {
+    use super::*;
+
+    #[test]
+    fn an_in_tree_path_needs_no_link() {
+        // It resolves through the generation symlink already; adding a link
+        // would be a self-reference.
+        assert_eq!(out_of_tree_link("/run/secrets/foo", "/run/secrets"), None);
+        assert_eq!(out_of_tree_link("/run/secrets", "/run/secrets"), None);
+        assert_eq!(
+            out_of_tree_link("/run/secrets/rendered/x", "/run/secrets"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_out_of_tree_path_needs_one() {
+        // The real zek case.
+        assert_eq!(
+            out_of_tree_link("/home/luis/.kube/configs/rio", "/run/secrets"),
+            Some("/home/luis/.kube/configs/rio".to_owned())
+        );
+    }
+
+    /// ★ THE PREFIX TRAP the predicate's `/` exists for.
+    ///
+    /// Without the separator, `/run/secrets-old/x` reads as "inside
+    /// /run/secrets" and is silently skipped -- reintroducing exactly the bug
+    /// this function was written to fix, in a form that looks correct.
+    #[test]
+    fn a_sibling_directory_is_not_inside() {
+        assert_eq!(
+            out_of_tree_link("/run/secrets-old/x", "/run/secrets"),
+            Some("/run/secrets-old/x".to_owned())
+        );
+        assert_eq!(
+            out_of_tree_link("/run/secretsX", "/run/secrets"),
+            Some("/run/secretsX".to_owned())
+        );
+    }
+
+    fn manifest_with_out_of_tree_template() -> crate::manifest::Manifest {
+        serde_json::from_str(
+            r#"{
+              "secretsMountPoint": "/run/secrets.d", "symlinkPath": "/run/secrets",
+              "keepGenerations": 1,
+              "secrets": [{ "name":"in","key":"k","path":"/run/secrets/in",
+                            "sopsFile":"/etc/s.yaml","format":"yaml","mode":"0400",
+                            "uid":0,"gid":0 }],
+              "templates": [{ "name":"kubeconfig-rio","path":"/home/luis/.kube/configs/rio",
+                              "content":"x","mode":"0400","uid":0,"gid":0 }]
+            }"#,
+        )
+        .expect("parses")
+    }
+
+    #[test]
+    fn the_plan_links_an_out_of_tree_template_at_the_stable_path() {
+        let steps = plan(&manifest_with_out_of_tree_template(), 7).expect("plans");
+        let link = steps
+            .iter()
+            .find_map(|s| match s {
+                Step::LinkOutOfTree { link, target } => Some((link.clone(), target.clone())),
+                _ => None,
+            })
+            .expect("an out-of-tree template must be linked");
+        assert_eq!(link.0, "/home/luis/.kube/configs/rio");
+        // ★ The STABLE path, measured on zek -- not "/run/secrets.d/7/...",
+        // which would break the moment the generation is reaped.
+        assert_eq!(link.1, "/run/secrets/rendered/kubeconfig-rio");
+        assert!(
+            !link.1.contains("secrets.d"),
+            "must not point into the generation: {}",
+            link.1
+        );
+    }
+
+    #[test]
+    fn an_in_tree_secret_gets_no_link_step() {
+        let steps = plan(&manifest_with_out_of_tree_template(), 7).expect("plans");
+        let links: Vec<_> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::LinkOutOfTree { link, .. } => Some(link.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(links, vec!["/home/luis/.kube/configs/rio"], "exactly one");
+    }
+
+    #[test]
+    fn the_swap_is_still_the_last_step() {
+        // The invariant the new steps had to be ordered around: nothing points
+        // at the generation until every entry in it succeeded.
+        let steps = plan(&manifest_with_out_of_tree_template(), 7).expect("plans");
+        assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })));
+    }
+
+    /// Anti-vacuity: a manifest with NOTHING out of tree must plan zero links.
+    /// Without this, a predicate that always returned `Some` would pass every
+    /// test above.
+    #[test]
+    fn a_wholly_in_tree_manifest_plans_no_links() {
+        let m: crate::manifest::Manifest = serde_json::from_str(
+            r#"{
+              "secretsMountPoint": "/run/secrets.d", "symlinkPath": "/run/secrets",
+              "keepGenerations": 1,
+              "secrets": [{ "name":"a","key":"k","path":"/run/secrets/a",
+                            "sopsFile":"/etc/s.yaml","format":"yaml","mode":"0400",
+                            "uid":0,"gid":0 }],
+              "templates": [{ "name":"b","path":"/run/secrets/rendered/b",
+                              "content":"x","mode":"0400","uid":0,"gid":0 }]
+            }"#,
+        )
+        .expect("parses");
+        let n = plan(&m, 7)
+            .expect("plans")
+            .iter()
+            .filter(|s| matches!(s, Step::LinkOutOfTree { .. }))
+            .count();
+        assert_eq!(n, 0);
     }
 }
