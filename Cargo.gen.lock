@@ -7,7 +7,7 @@
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
     "crates/cofre/Cargo.toml": "11ae0fa5289008f3934e76b5a20f7190e5138d6190d9e4d322a54257412bc0c9",
-    "crates/suminuri-install/Cargo.toml": "31a0dcd23891547c0c75d2a10a25866353b987e21e5cb73212aed388a932ffa0",
+    "crates/suminuri-install/Cargo.toml": "5dc526aa73ea286fdbcf3427a8ce618744a3eaff45b9d6a0d2694dd5899df3b1",
     "crates/suminuri-wire/Cargo.toml": "d456c4265f7b2a28742dcaf0b8b390cb66e537efa228810edb268ea04b0cbc6c",
     "crates/suminuri-yaml/Cargo.toml": "6f8b21e46ad66408554594d0313eabdd07cdab1dde42590f7c363098299f78c8",
     "crates/suminuri/Cargo.toml": "443ee6f4522a3eb1501e4cfb136c75c2ecd796dbee8a817b80681e29132fab3a"
@@ -14169,6 +14169,10 @@
         "path": "src/lib.rs"
       },
       "binaries": [
+        {
+          "name": "sops-install-secrets",
+          "path": "src/bin/sops-install-secrets.rs"
+        },
         {
           "name": "suminuri-install-secrets",
           "path": "src/bin/suminuri-install-secrets.rs"
