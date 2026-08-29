@@ -57,3 +57,63 @@ fn the_dropin_name_refuses_a_missing_manifest_the_same_way() {
         .expect("runs");
     assert_eq!(out.status.code(), Some(1));
 }
+
+// ── ★ THE CALLER'S ARGUMENT GRAMMAR ─────────────────────────────────────────
+//
+// sops-nix invokes this at BUILD time as
+//     sops-install-secrets -check-mode=sopsfile <manifest.json>
+// (read off zek's manifest.json.drv). Go's flag package uses ONE dash, and the
+// original parser took any argument not starting with `--` as the manifest
+// path -- so the flag became the path and the build died naming a file nobody
+// asked for.
+//
+// Like the binary name, this was invisible to every behavioural differential:
+// those invoked the program with the arguments WE chose, never the ones the
+// caller sends. An interface needs its own evidence.
+
+#[test]
+fn a_go_style_check_mode_flag_is_not_mistaken_for_the_manifest() {
+    let dir = std::env::temp_dir().join(format!("suminuri-cm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let mf = dir.join("manifest.json");
+    std::fs::write(
+        &mf,
+        r#"{"secretsMountPoint":"/run/secrets.d","symlinkPath":"/run/secrets",
+            "keepGenerations":1,
+            "secrets":[{"name":"a","key":"k","path":"/run/secrets/a",
+                        "sopsFile":"/etc/s.yaml","format":"yaml","mode":"0400",
+                        "uid":0,"gid":0}],
+            "templates":[]}"#,
+    )
+    .expect("write");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sops-install-secrets"))
+        .args(["-check-mode=sopsfile", mf.to_str().unwrap()])
+        .output()
+        .expect("runs");
+    let err = String::from_utf8_lossy(&out.stderr);
+
+    assert_eq!(out.status.code(), Some(0), "check mode must succeed: {err}");
+    assert!(err.contains("check-mode=sopsfile"), "{err}");
+    assert!(
+        err.contains("nothing installed"),
+        "check mode must install NOTHING -- it runs inside a nix builder with no \
+         /run/secrets and no identities: {err}"
+    );
+    // The failure this pins: the flag being read as the path.
+    assert!(
+        !err.contains("cannot read the manifest"),
+        "the flag was taken as the manifest path: {err}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn check_mode_still_refuses_a_manifest_that_does_not_exist() {
+    // Anti-vacuity: check mode must not be a blanket success.
+    let out = Command::new(env!("CARGO_BIN_EXE_sops-install-secrets"))
+        .args(["-check-mode=sopsfile", "/nonexistent/manifest.json"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(1));
+}
