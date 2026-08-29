@@ -2735,10 +2735,14 @@ name = "suminuri-install"
 version = "0.1.16"
 dependencies = [
  "age",
+ "libc",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
  "ssh-key",
+ "suminuri",
+ "suminuri-wire",
+ "suminuri-yaml",
 ]
 
 [[package]]
