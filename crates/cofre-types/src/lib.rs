@@ -956,15 +956,15 @@ mod tests {
     }
 
     /// theory/SELF-BOOTSTRAP-AKEYLESS.md's M0 step 1 -- the typed
-    /// SecretMaterializationPlan declaring Camelot's real bootstrap
-    /// secrets (mirroring camelot-bootstrap/secrets.go's exact
-    /// defaultSpec/GenerateSecureSecrets shape) validates against cofre's
+    /// SecretMaterializationPlans declaring the fleet's real bootstrap
+    /// secrets (mirroring the emitting Go tool's exact
+    /// defaultSpec/GenerateSecureSecrets shape) validate against cofre's
     /// real, unmocked SecretMaterializationPlan::validate() -- the same
     /// path `cofre plan --manifest <path>` runs. Data-only: this test
-    /// proves the plan is well-formed, it never generates or applies a
-    /// live secret. The plan file lives in the nix repo (not this one)
-    /// since it's fleet config, not a cofre-owned artifact -- read here
-    /// by absolute path as the pragmatic verification seam given the nix
+    /// proves the plans are well-formed, it never generates or applies a
+    /// live secret. The plan files live in the nix repo (not this one)
+    /// since they're fleet config, not cofre-owned artifacts -- read here
+    /// by relative path as the pragmatic verification seam given the nix
     /// repo isn't a Cargo workspace.
     /// ── ★ THE PATH IS DERIVED, AND ITS ABSENCE IS A SKIP, NOT A PANIC ─────
     /// This read a hardcoded `/Users/luis.d/code/github/pleme-io/nix/...`, so it
@@ -985,27 +985,80 @@ mod tests {
     /// cofre alone) is not a cofre defect, and turning it into a red test trains
     /// people to ignore the suite — the failure mode this repo's own docs call
     /// out elsewhere.
+    ///
+    /// ── ★ THE PLAN SET IS DISCOVERED, NOT HARDCODED BY FILENAME ───────────
+    /// This named ONE plan file, and that filename was a private deployment's
+    /// codename sitting in a public crate. The filename is the nix repo's to
+    /// choose, so pinning it here bought nothing and leaked something: the
+    /// directory is now walked and EVERY plan in it is validated. That is
+    /// strictly more coverage than the single hardcoded file, it cannot go
+    /// stale when the fleet renames or adds a plan, and it removes the
+    /// cross-repo literal entirely.
+    ///
+    /// The `metadata.name` equality and the secret COUNT that used to be
+    /// asserted here are deliberately gone. Both restated the *content* of
+    /// another repo's file — a literal free to disagree with the thing it
+    /// exists to pin — and the count was a fingerprint of one deployment's
+    /// bootstrap rather than a property of the schema. What remains are the
+    /// invariants cofre actually owns: every fleet plan parses through the
+    /// real validator, is non-vacuous, is not a test fixture, and is
+    /// sops-backed on a quarterly rotation at bootstrap tier.
+    ///
+    /// The empty-directory case is a SKIP, not a silent pass: a discovery loop
+    /// that finds nothing must not report green (the vacuous-guard class).
     #[test]
-    fn camelot_bootstrap_plan_validates() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../nix/cofre-plans/camelot-bootstrap.yaml");
-        let Ok(body) = std::fs::read_to_string(&path) else {
+    fn fleet_bootstrap_plans_validate() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../nix/cofre-plans");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             eprintln!(
-                "SKIP camelot_bootstrap_plan_validates: the plan lives in the \
-                 sibling `nix` repo and is not present at {} — check out \
-                 pleme-io/nix beside this repo to exercise it",
-                path.display()
+                "SKIP fleet_bootstrap_plans_validate: the plans live in the \
+                 sibling `nix` repo and it is not present at {} — check out \
+                 pleme-io/nix beside this repo to exercise them",
+                dir.display()
             );
             return;
         };
-        let plan = SecretMaterializationPlan::from_yaml(&body)
-            .unwrap_or_else(|e| panic!("camelot-bootstrap.yaml failed validation: {e}"));
-        assert_eq!(plan.metadata.name, "camelot-dev-bootstrap");
-        assert_eq!(plan.secrets.len(), 7);
-        assert!(!plan.test_only);
-        for s in &plan.secrets {
-            assert!(matches!(s.backend, BackendKind::Sops { .. }));
-            assert_eq!(s.rotation, RotationPolicy::Quarterly);
+        let mut plans: Vec<std::path::PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "yaml" || x == "yml"))
+            .collect();
+        plans.sort();
+
+        if plans.is_empty() {
+            eprintln!(
+                "SKIP fleet_bootstrap_plans_validate: {} holds no plan files — \
+                 a discovery loop that finds nothing is a skip, never a pass",
+                dir.display()
+            );
+            return;
+        }
+
+        for path in &plans {
+            let body = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("{} is unreadable: {e}", path.display()));
+            let plan = SecretMaterializationPlan::from_yaml(&body)
+                .unwrap_or_else(|e| panic!("{} failed validation: {e}", path.display()));
+            assert!(
+                !plan.metadata.name.is_empty(),
+                "{} declares an empty plan name",
+                path.display()
+            );
+            assert!(
+                !plan.secrets.is_empty(),
+                "{} declares no secrets — a vacuous plan validates but materializes nothing",
+                path.display()
+            );
+            assert!(!plan.test_only, "{} is a fleet plan, not a fixture", path.display());
+            for s in &plan.secrets {
+                assert!(
+                    matches!(s.backend, BackendKind::Sops { .. }),
+                    "{}: {:?} must be sops-backed at bootstrap tier",
+                    path.display(),
+                    s.name
+                );
+                assert_eq!(s.rotation, RotationPolicy::Quarterly);
+            }
         }
     }
 }
