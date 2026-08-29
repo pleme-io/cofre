@@ -86,10 +86,57 @@
               // (cofre.${attr}.${system} or { });
           }) systems
         );
+
+      # ── ★ THE DROP-IN NAME MUST BE IN THE STORE PATH ────────────────────
+      #
+      # `cargo build` produces both `suminuri-install-secrets` and
+      # `sops-install-secrets` (two [[bin]] targets over one library entry
+      # point). substrate's rust builder installs only the crate's single
+      # derived tool name, so the second never reached $out/bin -- and
+      # sops-nix resolves `${cfg.package}/bin/sops-install-secrets` literally.
+      #
+      # Measured on zek: pointing sops.package at the unwrapped package fails
+      # at BUILD time with exit 127 ("command not found") while `cargo test`
+      # and every behavioural differential pass, because they invoke the
+      # binary by its own path and never resolve the caller's name.
+      #
+      # Wrapped here rather than in substrate: the need is specific to a
+      # package that impersonates a foreign program, not a property every
+      # fleet Rust tool wants. A symlink, so there is exactly one binary and
+      # the two names cannot diverge.
+      withDropInName =
+        system: pkg:
+        let
+          pkgs = substrate.inputs.nixpkgs.legacyPackages.${system};
+        in
+        pkgs.runCommand "suminuri-install-secrets-dropin" { } ''
+          mkdir -p $out/bin
+          for b in ${pkg}/bin/*; do
+            ln -s "$b" "$out/bin/$(basename "$b")"
+          done
+          ln -sf ${pkg}/bin/suminuri-install-secrets $out/bin/sops-install-secrets
+          test -e $out/bin/sops-install-secrets || {
+            echo "the drop-in name is missing from the wrapper" >&2; exit 1; }
+        '';
     in
     cofre
     // {
-      packages = mergeBySystem "packages";
+      # ★ The wrapper is applied to EVERY variant, not just the host one: a
+      # NixOS node consumes `suminuri-install-secrets-<target>` and would
+      # otherwise get an unwrapped path with the drop-in name missing -- the
+      # exact 127 this exists to prevent, reappearing on the arm that matters.
+      packages = builtins.mapAttrs (
+        system: ps:
+        ps
+        // builtins.listToAttrs (
+          map
+            (n: {
+              name = n;
+              value = withDropInName system ps.${n};
+            })
+            (builtins.filter (n: builtins.match "suminuri-install-secrets.*" n != null) (builtins.attrNames ps))
+        )
+      ) (mergeBySystem "packages");
       apps = mergeBySystem "apps";
     };
 }
