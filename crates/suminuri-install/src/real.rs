@@ -51,9 +51,58 @@ fn gid_of(name: &str) -> Option<u32> {
     }
 }
 
+/// Create `path` and every missing ancestor at `DIR_MODE`, owned by `DIR_GROUP`.
+///
+/// ★ WHY NOT `create_dir_all` (rio, 2026-08-29). `create_dir_all` applies the
+/// process UMASK, and root's umask inside a systemd unit is 022 — so directories
+/// landed 0755, granting world **list** on the secret tree and letting any local
+/// user enumerate secret NAMES. Upstream's are 0751: traverse without list.
+///
+/// The mode is set with `DirBuilder::mode`, i.e. at CREATION, not by a later
+/// chmod. A chmod-after leaves a window in which the directory is world-listable
+/// while secrets are already being written into it — the same reasoning as
+/// `write_restrictive` setting its mode on the open.
+///
+/// ★ `mode()` is also subject to umask, so the umask is cleared for the
+/// duration and restored afterwards. Without that the DirBuilder mode is a
+/// ceiling rather than the value, and 0751 & !022 silently becomes 0751 & 0755
+/// = 0751 today but would drift with any other umask.
+fn create_dir_secure(path: &str) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    // SAFETY: umask is process-global; this runs single-threaded during
+    // activation, and the previous value is restored before returning.
+    let prev = unsafe { libc::umask(0) };
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true).mode(crate::place::DIR_MODE);
+    let created = b.create(path);
+    unsafe { libc::umask(prev) };
+    created.map_err(|e| e.to_string())?;
+
+    // Group is best-effort by design: a node without `keys` keeps root:root,
+    // which together with DIR_MODE is STRICTLY MORE restrictive than upstream
+    // (no group members can list). Failing the install over a missing group
+    // would trade a safe divergence for an outage.
+    if let Some(gid) = gid_of(crate::place::DIR_GROUP) {
+        let c = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        // SAFETY: `c` is a valid NUL-terminated path; -1 leaves the uid alone.
+        let rc = unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) };
+        if rc != 0 {
+            return Err(format!(
+                "chgrp {} on {path}: {}",
+                crate::place::DIR_GROUP,
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Fs for RealFs {
     fn ensure_secure_storage(&self, path: &str, user_mode: bool) -> Result<(), String> {
-        std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+        // The MOUNT POINT gets the same treatment: measured 751 root:keys on
+        // rio, and it is the directory an attacker would list first.
+        create_dir_secure(path)?;
 
         // ★ IDEMPOTENT. sops-install-secrets runs on EVERY rebuild, and
         // mounting a second backing store over the first would stack them —
@@ -78,14 +127,18 @@ impl Fs for RealFs {
     }
 
     fn make_dir(&self, path: &str) -> Result<(), String> {
-        std::fs::create_dir_all(path).map_err(|e| e.to_string())
+        create_dir_secure(path)
     }
 
     fn write_restrictive(&self, path: &str, contents: &[u8]) -> Result<(), String> {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
         if let Some(parent) = std::path::Path::new(path).parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            // ★ Through the SAME helper as make_dir. A second call site using
+            // bare create_dir_all is how the 0755 leak reached the tree in the
+            // first place: the generation directory was one code path and every
+            // secret's parent directory was another.
+            create_dir_secure(&parent.to_string_lossy())?;
         }
         // ★ The mode is on the OPEN, not a later chmod. Creating 0644 and
         // narrowing afterwards leaves a window in which the plaintext exists
@@ -135,6 +188,33 @@ impl Fs for RealFs {
         let _ = std::fs::remove_file(&tmp);
         std::os::unix::fs::symlink(target, &tmp).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, link).map_err(|e| e.to_string())
+    }
+
+    fn reap_generations(&self, mount: &str, keep: u32, current: &str) -> Result<(), String> {
+        let mut gens: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(mount)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_dir())
+            // ★ Only NUMERIC names. The mount also holds `age-keys.txt` and a
+            // `gpg<random>` scratch directory that upstream leaves behind;
+            // treating either as a generation would delete live key material.
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.parse::<u64>().ok().map(|k| (k, e.path()))
+            })
+            .filter(|(_, p)| p.to_string_lossy() != current)
+            .collect();
+        // Newest first, so `keep` counts from the most recent.
+        gens.sort_by(|a, b| b.0.cmp(&a.0));
+
+        // ★ `current` is excluded above and NOT counted against `keep`: it is
+        // the live generation, not a kept spare. keep=1 therefore means "the
+        // live one plus one previous", which is what upstream leaves behind and
+        // is what makes a rollback possible at all.
+        for (_, path) in gens.into_iter().skip(keep as usize) {
+            std::fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
     }
 
     fn remove_dir_all(&self, path: &str) -> Result<(), String> {
@@ -544,5 +624,108 @@ mod darwin_tests {
     fn ramdisk_size_matches_the_measured_upstream_volume() {
         assert_eq!(RAMDISK_SECTORS, 131_072);
         assert_eq!(RAMDISK_SECTORS * 512 / 1024 / 1024, 64, "should be 64 MiB");
+    }
+}
+
+#[cfg(test)]
+mod dir_and_reap_tests {
+    use super::*;
+
+    /// ★ 0751, NOT 0755 — and the difference is a name leak.
+    ///
+    /// Measured on rio after the first cutover: the drop-in had created
+    /// `/run/secrets.d/<gen>/github` as `755 root:root` where upstream's was
+    /// `751 root:keys`. `create_dir_all` applies the process umask (022 for
+    /// root under systemd), so the permissive mode was INHERITED, never chosen.
+    ///
+    /// It survived a byte-identical verdict, because the differential compared
+    /// FILES by name/mode/uid/gid/content and never looked at DIRECTORY modes.
+    #[test]
+    fn the_directory_mode_denies_listing() {
+        assert_eq!(crate::place::DIR_MODE, 0o751);
+        // The bit that matters, stated as the property rather than the number:
+        // world may traverse, world may NOT read (list).
+        assert_eq!(crate::place::DIR_MODE & 0o001, 0o001, "world traverse");
+        assert_eq!(crate::place::DIR_MODE & 0o004, 0, "world must NOT list");
+        assert_ne!(crate::place::DIR_MODE, 0o755, "0755 is the regression");
+    }
+
+    #[test]
+    fn create_dir_secure_applies_the_mode_despite_umask() {
+        // ★ The umask is the whole point: DirBuilder::mode is masked by it, so
+        // without clearing it 0751 silently becomes 0751 & !umask. Set a hostile
+        // umask and require the mode to survive.
+        let base = std::env::temp_dir().join(format!("cds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let deep = base.join("a/b/c");
+        let prev = unsafe { libc::umask(0o077) };
+        let r = create_dir_secure(&deep.to_string_lossy());
+        unsafe { libc::umask(prev) };
+        r.expect("creates");
+
+        use std::os::unix::fs::PermissionsExt as _;
+        for p in [base.join("a"), base.join("a/b"), deep.clone()] {
+            let m = std::fs::metadata(&p).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(m, 0o751, "{} got {m:o}, umask leaked in", p.display());
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Reaping: the numeric filter is the safety property.
+    #[test]
+    fn reaping_keeps_current_and_the_newest_and_ignores_non_generations() {
+        let base = std::env::temp_dir().join(format!("reap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("base");
+        for n in ["1", "2", "3", "10"] {
+            std::fs::create_dir_all(base.join(n)).expect("gen");
+        }
+        // ★ The two things upstream leaves in the mount that are NOT
+        // generations. Treating either as one would delete live key material.
+        std::fs::write(base.join("age-keys.txt"), b"AGE-SECRET").expect("keyfile");
+        std::fs::create_dir_all(base.join("gpg4114821736")).expect("gpg scratch");
+
+        let current = base.join("10");
+        RealFs
+            .reap_generations(&base.to_string_lossy(), 1, &current.to_string_lossy())
+            .expect("reaps");
+
+        let left: std::collections::BTreeSet<String> = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+
+        assert!(left.contains("10"), "current must survive: {left:?}");
+        assert!(
+            left.contains("3"),
+            "keep=1 keeps the newest previous: {left:?}"
+        );
+        assert!(!left.contains("2"), "older must be reaped: {left:?}");
+        assert!(!left.contains("1"), "older must be reaped: {left:?}");
+        assert!(
+            left.contains("age-keys.txt"),
+            "KEY MATERIAL must survive: {left:?}"
+        );
+        assert!(
+            left.contains("gpg4114821736"),
+            "a non-numeric scratch dir is not a generation: {left:?}"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn reaping_with_nothing_to_reap_is_not_an_error() {
+        // Anti-vacuity's sibling: the common case must not throw, or the
+        // not-fatal handling in apply would hide a real failure behind noise.
+        let base = std::env::temp_dir().join(format!("reap0-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("7")).expect("gen");
+        let cur = base.join("7");
+        RealFs
+            .reap_generations(&base.to_string_lossy(), 1, &cur.to_string_lossy())
+            .expect("no-op is success");
+        assert!(cur.exists());
+        std::fs::remove_dir_all(&base).ok();
     }
 }

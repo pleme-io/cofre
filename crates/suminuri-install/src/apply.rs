@@ -67,6 +67,15 @@ pub trait Fs {
     /// # Errors
     /// Implementation-defined I/O failure.
     fn remove_dir_all(&self, path: &str) -> Result<(), String>;
+
+    /// Remove generations under `mount` beyond `keep`, never touching
+    /// `current`.
+    ///
+    /// ★ On the Fs trait rather than in the planner because only an executor
+    /// can list a directory. That split is what made `ReapGenerations`
+    /// emittable at all — the pure planner could never name the paths, which is
+    /// why the older `RemoveGeneration` variant sat unreachable.
+    fn reap_generations(&self, mount: &str, keep: u32, current: &str) -> Result<(), String>;
 }
 
 /// The plaintext source.
@@ -235,6 +244,19 @@ pub fn apply<F: Fs, D: Decryptor>(
                     })?;
                 written += 1;
             }
+            Step::ReapGenerations {
+                mount,
+                keep,
+                current,
+            } => {
+                // ★ A reap failure is NOT fatal. The secrets are already placed
+                // and the swap already happened, so the node is fully working;
+                // refusing here would fail an activation that has, in every way
+                // the operator cares about, succeeded. It is reported instead.
+                if let Err(e) = fs.reap_generations(mount, *keep, current) {
+                    eprintln!("suminuri-install-secrets: reap failed (secrets are installed): {e}");
+                }
+            }
             Step::LinkOutOfTree { link, target } => {
                 // ★ The parent may not exist. zek's kubeconfig-rio declares
                 // /home/luis/.kube/configs/rio, and `.kube/configs` is created
@@ -337,6 +359,9 @@ mod tests {
         fn remove_dir_all(&self, p: &str) -> Result<(), String> {
             self.note(&format!("rm {p}"))
         }
+        fn reap_generations(&self, m: &str, k: u32, c: &str) -> Result<(), String> {
+            self.note(&format!("reap {m} keep={k} current={c}"))
+        }
     }
 
     struct OkDec;
@@ -396,16 +421,30 @@ mod tests {
     }
 
     #[test]
-    fn the_happy_path_swaps_exactly_once_and_last() {
+    fn the_happy_path_swaps_exactly_once_and_after_every_write() {
         let fs = SpyFs::default();
         let r = apply(&m(), 3, &fs, &OkDec).expect("ok");
         assert_eq!(r.written, 1);
         let log = fs.log.borrow();
-        assert!(
-            log.last().is_some_and(|l| l.starts_with("swap")),
-            "swap must be last"
-        );
+        // ★ Not literal lastness: reaping follows the swap, and must -- deleting
+        // a generation while /run/secrets still points into it would dangle
+        // every consumer. What must hold is that no WRITE happens after it.
+        let swap = log
+            .iter()
+            .position(|l| l.starts_with("swap"))
+            .expect("a swap must happen");
         assert_eq!(log.iter().filter(|l| l.starts_with("swap")).count(), 1);
+        assert!(
+            !log[swap + 1..].iter().any(|l| l.starts_with("write")
+                || l.starts_with("chown")
+                || l.starts_with("chmod")),
+            "no write may follow the swap: {log:?}"
+        );
+        // And the reap is the thing that legitimately does follow it.
+        assert!(
+            log[swap + 1..].iter().any(|l| l.starts_with("reap")),
+            "reaping must be planned after the swap: {log:?}"
+        );
     }
 
     #[test]

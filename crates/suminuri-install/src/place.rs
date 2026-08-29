@@ -125,8 +125,30 @@ pub enum Step {
         target: String,
     },
     /// Remove a generation older than `keepGenerations`.
+    ///
+    /// ★ DECLARED SINCE THE START AND NEVER EMITTED — the defect this pairs
+    /// with. The planner is PURE: it cannot list a directory, so it can never
+    /// name which generations exist, so this variant had no constructor on any
+    /// real path. It looked like reaping was implemented.
     RemoveGeneration {
         path: String,
+    },
+    /// Reap generations beyond `keep`, newest-first, under `mount`.
+    ///
+    /// ★ The POLICY, not the paths — which is what makes it emittable from a
+    /// pure planner. The executor does the listing, because only the executor
+    /// can. Splitting it this way is the fix for `RemoveGeneration` being
+    /// unreachable rather than merely unused.
+    ///
+    /// ★ Why it matters more than disk hygiene: these live on the secure store,
+    /// which is RAMFS — WIRED MEMORY that can never be paged out. An unreaped
+    /// generation is not a stale directory, it is memory the kernel can never
+    /// reclaim, accumulating on every rebuild. Measured on rio after the first
+    /// cutover: 2 generations present with `keepGenerations: 1`.
+    ReapGenerations {
+        mount: String,
+        keep: u32,
+        current: String,
     },
 }
 
@@ -211,6 +233,40 @@ impl std::fmt::Display for PlanError {
 ///
 /// ★ 0600 root-only. Not the declared mode: see ordering rule 1.
 pub const CREATE_MODE: u32 = 0o600;
+
+/// The mode every directory in the secret tree is created with.
+///
+/// ── ★ 0751, NOT 0755, AND THE DIFFERENCE IS A LEAK ──────────────────────────
+///
+/// `0755` grants world **read** on the directory, which means any local user can
+/// `ls` it and enumerate SECRET NAMES. `0751` grants traverse (`x`) without list
+/// (`r`): a process that already knows a path can still open it, and nobody can
+/// discover what is there.
+///
+/// Measured on rio 2026-08-29, after the first cutover: the drop-in had created
+/// `/run/secrets.d/<gen>/github` as `755 root:root` where upstream's was
+/// `751 root:keys`. `std::fs::create_dir_all` applies the process umask, and
+/// root's umask on a systemd unit is 022 — so the permissive mode was inherited,
+/// never chosen.
+///
+/// ★ It survived a byte-identical verdict. The differential compared FILES by
+/// name, mode, uid, gid and content — all of which matched exactly — and never
+/// looked at DIRECTORY modes. The same shape as every other miss in this
+/// series: a check whose reach is narrower than the property it is trusted for.
+pub const DIR_MODE: u32 = 0o751;
+
+/// The group every directory in the secret tree belongs to.
+///
+/// ★ NOT in the manifest. sops-nix hardcodes it, so the only way to learn it is
+/// to read a live tree: `/run/secrets.d` and every generation under it are
+/// `root:keys` on rio. Recorded as a constant here rather than guessed at each
+/// call site.
+///
+/// Absence is tolerated: a node without the group keeps `root:root`, which with
+/// `DIR_MODE` is STRICTLY MORE restrictive than upstream (no group members can
+/// list), so failing the install over it would trade a safe divergence for an
+/// outage.
+pub const DIR_GROUP: &str = "keys";
 
 /// Expand systemd's `%r` runtime-directory specifier.
 ///
@@ -373,11 +429,28 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
         }
     }
 
-    // ★ LAST. Nothing points at the generation until every entry AND every
-    // template in it succeeded.
+    // ★ THE SWAP IS LAST AMONG WRITES. Nothing points at the generation until
+    // every entry AND every template in it succeeded.
     steps.push(Step::SwapSymlink {
         link: m.symlink_path.clone(),
-        target: gen_dir,
+        target: gen_dir.clone(),
+    });
+
+    // ── ★ REAPING COMES AFTER THE SWAP, AND ONLY AFTER ──────────────────────
+    //
+    // Ordering is forced, not chosen: reaping before the swap would delete a
+    // generation while /run/secrets still points into it, so every consumer
+    // would read through a dangling link until the swap landed -- and if the
+    // run then failed, the node would be left with NO usable secrets at all.
+    //
+    // That is not hypothetical. It is precisely the state a broken differential
+    // put rio in on 2026-08-29 (27 dangling symlinks, GitOps down 3.5 hours),
+    // reached by a different route. After the swap, the old generation is
+    // referenced by nothing.
+    steps.push(Step::ReapGenerations {
+        mount,
+        keep: m.keep_generations,
+        current: gen_dir,
     });
     Ok(steps)
 }
@@ -464,6 +537,9 @@ mod tests {
 
     #[test]
     fn user_mode_plans_no_chown_at_all() {
+        let _g = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // ★ ryn: 66 of 66 entries carry NO owner and NO uid, because the
         // installer runs AS the user and there is nothing to express.
         // Guessing root would chown a person's own secrets away from them.
@@ -513,6 +589,9 @@ mod tests {
 
     #[test]
     fn an_unset_runtime_dir_is_refused_not_guessed() {
+        let _g = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let m = user_mode_manifest();
         assert!(matches!(plan(&m, 1), Err(PlanError::NoRuntimeDir { .. })));
@@ -536,7 +615,11 @@ mod tests {
     fn the_symlink_swap_is_the_last_step() {
         // Rule 2. Nothing may point at a generation that is not complete.
         let steps = plan(&m(), 7).expect("plan");
-        assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })));
+        // ★ The invariant is NOT "swap is the final element" -- reaping
+        // legitimately follows it, and must, because deleting a generation
+        // while /run/secrets still points into it would dangle every consumer.
+        // What must hold is that the swap comes after every WRITE.
+        assert!(swap_follows_every_write(&steps), "{steps:#?}");
         let swaps = steps
             .iter()
             .filter(|s| matches!(s, Step::SwapSymlink { .. }))
@@ -634,10 +717,7 @@ mod tests {
             render > last_write,
             "a template was planned before an entry it may reference"
         );
-        assert!(
-            matches!(steps.last(), Some(Step::SwapSymlink { .. })),
-            "swap still last"
-        );
+        assert!(swap_follows_every_write(&steps), "swap still last");
     }
 
     #[test]
@@ -694,6 +774,55 @@ mod tests {
         // delete secrets a process is about to be pointed at.
         assert_eq!(prune(&[1, 2, 9], 2, 1), vec![1]);
     }
+}
+
+/// Serialises the tests that mutate `XDG_RUNTIME_DIR`.
+///
+/// ★ Env vars are PROCESS-global and cargo runs tests in parallel, so four
+/// tests setting and one unsetting the same variable is a race: the unsetting
+/// test reads a value another test restored a microsecond earlier and fails
+/// with a completely unrelated-looking assertion.
+///
+/// It was latent -- passing on the scheduling that happened to hold -- and
+/// surfaced only when adding unrelated tests changed the interleaving. That is
+/// the worst kind of flake: it arrives blamed on whatever change was in flight.
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The ordering property the "swap is last" assertions were really about.
+///
+/// ★ They asserted literal lastness, which was a PROXY. When reaping was added
+/// after the swap -- necessarily, since deleting a generation while
+/// /run/secrets still points into it would dangle every consumer -- all three
+/// went red while the property they existed to protect was untouched. A proxy
+/// that fails on a correct change is a test that will be weakened under
+/// pressure, so it is replaced by the property itself.
+#[cfg(test)]
+fn swap_follows_every_write(steps: &[Step]) -> bool {
+    let is_write = |s: &Step| {
+        matches!(
+            s,
+            Step::Write { .. }
+                | Step::Chown { .. }
+                | Step::Chmod { .. }
+                | Step::RenderTemplate { .. }
+                | Step::MakeGeneration { .. }
+                | Step::LinkOutOfTree { .. }
+        )
+    };
+    let Some(swap) = steps
+        .iter()
+        .position(|s| matches!(s, Step::SwapSymlink { .. }))
+    else {
+        return false;
+    };
+    // exactly one swap, and no write after it
+    steps
+        .iter()
+        .filter(|s| matches!(s, Step::SwapSymlink { .. }))
+        .count()
+        == 1
+        && !steps[swap + 1..].iter().any(is_write)
 }
 
 #[cfg(test)]
@@ -788,11 +917,12 @@ mod out_of_tree_tests {
     }
 
     #[test]
-    fn the_swap_is_still_the_last_step() {
+    fn the_swap_follows_every_write() {
         // The invariant the new steps had to be ordered around: nothing points
-        // at the generation until every entry in it succeeded.
+        // at the generation until every entry in it succeeded. NOT literal
+        // lastness -- reaping follows the swap and must.
         let steps = plan(&manifest_with_out_of_tree_template(), 7).expect("plans");
-        assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })));
+        assert!(super::swap_follows_every_write(&steps), "{steps:#?}");
     }
 
     /// Anti-vacuity: a manifest with NOTHING out of tree must plan zero links.
