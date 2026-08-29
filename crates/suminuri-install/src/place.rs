@@ -99,6 +99,12 @@ pub enum Ownership {
 pub enum PlanError {
     /// An entry names neither an owner nor a uid.
     NoOwnership { entry: String },
+    /// The mount point uses `%r` and `XDG_RUNTIME_DIR` is unset.
+    ///
+    /// ★ Refused rather than defaulted. A guessed runtime directory publishes
+    /// a person's secrets somewhere they will not look, while every step
+    /// reports success.
+    NoRuntimeDir { mount: String },
     /// An entry's mode string was not octal.
     ///
     /// ★ The field is `entry`, not the obvious alternative. It holds a NAME,
@@ -115,6 +121,11 @@ impl std::fmt::Display for PlanError {
             Self::BadMode { entry, mode } => {
                 write!(f, "entry {entry}: mode {mode:?} is not octal")
             }
+            Self::NoRuntimeDir { mount } => write!(
+                f,
+                "mount point {mount} uses %r but XDG_RUNTIME_DIR is unset — refusing \
+                 rather than guessing where a person's secrets should live"
+            ),
             Self::NoOwnership { entry } => write!(
                 f,
                 "entry {entry}: neither an owner name nor a uid — refusing rather than \
@@ -129,6 +140,24 @@ impl std::fmt::Display for PlanError {
 ///
 /// ★ 0600 root-only. Not the declared mode: see ordering rule 1.
 pub const CREATE_MODE: u32 = 0o600;
+
+/// Expand systemd's `%r` runtime-directory specifier.
+///
+/// ★ A USER-MODE manifest carries `secretsMountPoint: "%r/secrets.d"` — a
+/// SPECIFIER, not a path. Taking it literally would create a directory called
+/// `%r` in the working directory and publish secrets into it, which succeeds
+/// at every step and leaves the real location empty.
+///
+/// Resolved from `XDG_RUNTIME_DIR`, which is what systemd expands `%r` to.
+fn resolve_runtime_specifier(mount: &str) -> Result<String, PlanError> {
+    if !mount.contains("%r") {
+        return Ok(mount.to_owned());
+    }
+    let rt = std::env::var("XDG_RUNTIME_DIR").map_err(|_| PlanError::NoRuntimeDir {
+        mount: mount.to_owned(),
+    })?;
+    Ok(mount.replace("%r", &rt))
+}
 
 /// A template's ownership, same two forms as an entry's.
 fn template_ownership(t: &crate::manifest::Template) -> Result<Ownership, PlanError> {
@@ -151,21 +180,27 @@ fn ownership_of(s: &Secret) -> Result<Ownership, PlanError> {
     }
 }
 
-fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
+fn steps_for(secret: &Secret, gen_dir: &str, user_mode: bool) -> Result<Vec<Step>, PlanError> {
     let mode = secret.mode_octal().map_err(|m| PlanError::BadMode {
         entry: secret.name.clone(),
         mode: m.to_owned(),
     })?;
     let path = format!("{gen_dir}/{}", secret.name);
-    Ok(vec![
-        Step::Write {
-            path: path.clone(),
-            key: secret.key.clone(),
-            from_file: secret.sops_file.clone(),
-        },
-        Step::Chown { path: path.clone(), own: ownership_of(secret)? },
-        Step::Chmod { path, mode },
-    ])
+    let mut steps = vec![Step::Write {
+        path: path.clone(),
+        key: secret.key.clone(),
+        from_file: secret.sops_file.clone(),
+    }];
+    // ★ USER MODE HAS NO CHOWN AT ALL, and that is not a shortcut. The
+    // installer runs AS the user, so the files are already theirs — and a
+    // user-mode manifest carries no owner and no uid (66 of 66 on ryn),
+    // because there is nothing to express. Guessing root here would chown a
+    // person's own secrets away from them.
+    if !user_mode {
+        steps.push(Step::Chown { path: path.clone(), own: ownership_of(secret)? });
+    }
+    steps.push(Step::Chmod { path, mode });
+    Ok(steps)
 }
 
 /// Build the full ordered plan for one generation.
@@ -175,22 +210,28 @@ fn steps_for(secret: &Secret, gen_dir: &str) -> Result<Vec<Step>, PlanError> {
 /// abandoned entirely rather than skipping that secret, because a partially
 /// planned generation is the thing rule 2 exists to prevent.
 pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
-    let gen_dir = format!("{}/{generation}", m.secrets_mount_point);
+    let mount = resolve_runtime_specifier(&m.secrets_mount_point)?;
+    let gen_dir = format!("{mount}/{generation}");
     // ★ THE MOUNT COMES FIRST. Creating the generation directory on a plain
     // filesystem and mounting afterwards would hide the already-written
     // secrets under the mount — present on disk, invisible to every reader.
-    let mut steps = vec![
-        Step::EnsureRamfs { path: m.secrets_mount_point.clone() },
-        Step::MakeGeneration { path: gen_dir.clone() },
-    ];
+    let mut steps = Vec::new();
+    // ★ NO RAMFS IN USER MODE. Mounting requires privilege the installer does
+    // not have when it runs as a person, and upstream does not mount either —
+    // the runtime directory is already tmpfs-backed and owned by the user.
+    // Attempting it would fail every user-mode run with EPERM.
+    if !m.user_mode {
+        steps.push(Step::EnsureRamfs { path: mount.clone() });
+    }
+    steps.push(Step::MakeGeneration { path: gen_dir.clone() });
 
     // ★ USER PASS FIRST. A secret a user's own creation depends on cannot be
     // chowned to that user, so these are placed before the main set.
     for s in m.user_pass() {
-        steps.extend(steps_for(s, &gen_dir)?);
+        steps.extend(steps_for(s, &gen_dir, m.user_mode)?);
     }
     for s in m.main_pass() {
-        steps.extend(steps_for(s, &gen_dir)?);
+        steps.extend(steps_for(s, &gen_dir, m.user_mode)?);
     }
 
     // ★ TEMPLATES AFTER ENTRIES, because a template's body is rendered FROM
@@ -214,7 +255,9 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
             content: t.content.clone(),
             references: crate::template::referenced(&t.content, &m.placeholder_by_secret_name),
         });
-        steps.push(Step::Chown { path: path.clone(), own: template_ownership(t)? });
+        if !m.user_mode {
+            steps.push(Step::Chown { path: path.clone(), own: template_ownership(t)? });
+        }
         steps.push(Step::Chmod { path, mode });
     }
 
@@ -276,6 +319,68 @@ mod tests {
             }
         }
         assert!(seen_chown, "no chown/chmod pair found");
+    }
+
+    fn user_mode_manifest() -> Manifest {
+        let raw = M
+            .replace("\"secretsMountPoint\": \"/run/secrets.d\"", "\"secretsMountPoint\": \"%r/secrets.d\"")
+            .replace("\"keepGenerations\": 2,", "\"keepGenerations\": 2, \"userMode\": true,")
+            .replace("\"owner\":\"root\"", "\"owner\":null")
+            .replace("\"owner\":\"luis\"", "\"owner\":null")
+            .replace("\"group\":\"root\"", "\"group\":null")
+            .replace("\"group\":\"users\"", "\"group\":null")
+            .replace("\"uid\":0", "\"uid\":null")
+            .replace("\"uid\":1001", "\"uid\":null")
+            .replace("\"gid\":0", "\"gid\":null")
+            .replace("\"gid\":100", "\"gid\":null");
+        serde_json::from_str(&raw).expect("user-mode manifest")
+    }
+
+    #[test]
+    fn user_mode_plans_no_chown_at_all() {
+        // ★ ryn: 66 of 66 entries carry NO owner and NO uid, because the
+        // installer runs AS the user and there is nothing to express.
+        // Guessing root would chown a person's own secrets away from them.
+        // SAFETY: single-threaded test.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
+        let m = user_mode_manifest();
+        let steps = plan(&m, 1).expect("user mode must plan");
+        assert!(
+            !steps.iter().any(|s| matches!(s, Step::Chown { .. })),
+            "user mode must plan no chown"
+        );
+        assert!(steps.iter().any(|s| matches!(s, Step::Chmod { .. })), "mode still applies");
+    }
+
+    #[test]
+    fn user_mode_plans_no_ramfs_mount() {
+        // Mounting needs privilege the installer does not have as a person,
+        // and upstream does not mount either. Attempting it would fail every
+        // user-mode run with EPERM.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
+        let steps = plan(&user_mode_manifest(), 1).expect("plan");
+        assert!(!steps.iter().any(|s| matches!(s, Step::EnsureRamfs { .. })));
+        assert!(matches!(steps[0], Step::MakeGeneration { .. }));
+    }
+
+    #[test]
+    fn the_runtime_specifier_is_expanded_not_taken_literally() {
+        // `%r` is systemd's runtime-directory specifier. Taken literally it
+        // creates a directory NAMED `%r` and publishes secrets into it —
+        // every step succeeds and the real location stays empty.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
+        let steps = plan(&user_mode_manifest(), 7).expect("plan");
+        let Step::MakeGeneration { path } = &steps[0] else { panic!("mkgen") };
+        assert_eq!(path, "/run/user/501/secrets.d/7", "%r was not expanded");
+        assert!(!path.contains("%r"));
+    }
+
+    #[test]
+    fn an_unset_runtime_dir_is_refused_not_guessed() {
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let m = user_mode_manifest();
+        assert!(matches!(plan(&m, 1), Err(PlanError::NoRuntimeDir { .. })));
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
     }
 
     #[test]
