@@ -86,7 +86,14 @@ impl std::fmt::Display for IdentitySource {
 
 /// The age identities available to this process, with where each came from.
 pub struct AgeIdentities {
-    identities: Vec<age::x25519::Identity>,
+    /// ★ `Box<dyn age::Identity>`, not `Vec<x25519::Identity>`.
+    ///
+    /// Widened 2026-08-29 so an SSH host key can be an identity. age models
+    /// both `x25519::Identity` and `ssh::Identity` as `age::Identity`, and the
+    /// unwrap path below already coerced to `&dyn age::Identity` — so the
+    /// concrete type in this field was the only thing forbidding ssh keys, and
+    /// it was never load-bearing.
+    identities: Vec<Box<dyn age::Identity + Send + Sync>>,
     sources: Vec<IdentitySource>,
 }
 
@@ -137,9 +144,85 @@ impl AgeIdentities {
         }
 
         Ok(Self {
-            identities,
+            // ★ Boxed HERE rather than in `parse_into`, which genuinely parses
+            // `AGE-SECRET-KEY-` lines and should keep its concrete type. The
+            // widening exists so OTHER identity kinds can join the same
+            // vector — it is not a change to how age keys are read.
+            identities: identities
+                .into_iter()
+                .map(|i| Box::new(i) as Box<dyn age::Identity + Send + Sync>)
+                .collect(),
             sources,
         })
+    }
+
+    /// Build identities from EXPLICIT paths, including SSH host keys.
+    ///
+    /// ── ★ WHY THIS IS SEPARATE FROM `discover` ─────────────────────────
+    ///
+    /// `discover` reads the environment the way sops does and deliberately
+    /// does not consult SSH sources — [`Self::unsupported_sources`] names them
+    /// so their absence never reads as "no key found". That contract is
+    /// unchanged and this does not touch it.
+    ///
+    /// This is for a caller that already KNOWS which files to use because
+    /// something told it: `sops-install-secrets`' manifest names `ageKeyFile`
+    /// and `ageSshKeyPaths` outright. Discovery would be the wrong mechanism —
+    /// there is nothing to discover.
+    ///
+    /// **On a NixOS node the ssh path is the interesting one:** the manifest
+    /// names `/etc/ssh/ssh_host_ed25519_key`, the same file sshd serves as a
+    /// host key. The node's ssh host identity IS its decryption identity.
+    ///
+    /// # Errors
+    /// [`KeyError`] only if a named, readable age file parses as no identity.
+    /// An UNREADABLE path is SKIPPED, not fatal: a node can boot before
+    /// `/var/lib` is mounted while its ssh host key is already present.
+    pub fn from_paths(
+        env: &dyn crate::env::Environment,
+        age_key_files: &[String],
+        ssh_key_files: &[String],
+    ) -> Result<Self, KeyError> {
+        let mut identities: Vec<Box<dyn age::Identity + Send + Sync>> = Vec::new();
+        let mut sources = Vec::new();
+
+        for p in age_key_files {
+            let Ok(contents) = env.read_to_string(std::path::Path::new(p)) else {
+                continue;
+            };
+            let src = IdentitySource::File(p.clone());
+            let mut parsed = Vec::new();
+            if parse_into(&contents, &mut parsed, &src)? > 0 {
+                identities.extend(
+                    parsed
+                        .into_iter()
+                        .map(|i| Box::new(i) as Box<dyn age::Identity + Send + Sync>),
+                );
+                sources.push(src);
+            }
+        }
+
+        for p in ssh_key_files {
+            let Ok(contents) = env.read_to_string(std::path::Path::new(p)) else {
+                continue;
+            };
+            let Ok(id) = age::ssh::Identity::from_buffer(
+                std::io::BufReader::new(contents.as_bytes()),
+                Some(p.clone()),
+            ) else {
+                continue;
+            };
+            // ★ `Unsupported` is a SUCCESS value from age — an unusable key
+            // comes back as a variant, not an Err. Pushing it would hand the
+            // node an identity that silently decrypts nothing.
+            if matches!(id, age::ssh::Identity::Unsupported(_)) {
+                continue;
+            }
+            identities.push(Box::new(id));
+            sources.push(IdentitySource::File(p.clone()));
+        }
+
+        Ok(Self { identities, sources })
     }
 
     /// The identity sources sops supports that this build does not.
@@ -279,7 +362,7 @@ pub fn unwrap_data_key(
             identities
                 .identities
                 .iter()
-                .map(|i| i as &dyn age::Identity),
+                .map(|i| &**i as &dyn age::Identity),
         ) else {
             continue;
         };
@@ -400,7 +483,7 @@ mod tests {
 
         let meta = Metadata::from_wrapped(wrapped, "2026-08-18T00:00:00Z", "mac");
         let ids = AgeIdentities {
-            identities: vec![id],
+            identities: vec![Box::new(id)],
             sources: vec![],
         };
         let back = unwrap_data_key(&meta, &ids).expect("unwrap");
@@ -418,7 +501,7 @@ mod tests {
             "mac",
         );
         let ids = AgeIdentities {
-            identities: vec![stranger],
+            identities: vec![Box::new(stranger)],
             sources: vec![],
         };
         let err = unwrap_data_key(&meta, &ids).expect_err("must refuse");
@@ -452,7 +535,7 @@ mod tests {
         );
         assert_eq!(meta.age_keys().len(), 3);
         let ids = AgeIdentities {
-            identities: vec![id_a],
+            identities: vec![Box::new(id_a)],
             sources: vec![],
         };
         assert_eq!(
@@ -587,7 +670,7 @@ mod tests {
     fn debug_never_prints_an_identity() {
         let (id, _) = fresh();
         let ids = AgeIdentities {
-            identities: vec![id],
+            identities: vec![Box::new(id)],
             sources: vec![],
         };
         let shown = format!("{ids:?}");
@@ -595,6 +678,73 @@ mod tests {
             !shown.contains("AGE-SECRET-KEY"),
             "leaked an identity: {shown}"
         );
+    }
+
+    // ── from_paths: explicit identities, including SSH host keys ─────────
+
+    fn generated_ssh_key() -> String {
+        // ★ Generated in-process and dropped. Never written to disk, never
+        // committed — the pre-commit guard refuses key fixtures, correctly:
+        // a scanner cannot tell a fixture from the real thing.
+        let k = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+            .expect("generate");
+        k.to_openssh(ssh_key::LineEnding::LF)
+            .expect("encode")
+            .to_string()
+    }
+
+    #[test]
+    fn from_paths_accepts_an_ssh_host_key_as_an_identity() {
+        // THE capability this adds. On a NixOS node the manifest names
+        // /etc/ssh/ssh_host_ed25519_key -- the same file sshd serves as a host
+        // key -- so the node's ssh host identity IS its decryption identity.
+        let env = MockEnvironment::new()
+            .with_file("/etc/ssh/ssh_host_ed25519_key", &generated_ssh_key());
+        let ids =
+            AgeIdentities::from_paths(&env, &[], &["/etc/ssh/ssh_host_ed25519_key".into()])
+                .expect("from_paths");
+        assert_eq!(ids.len(), 1, "the ssh host key must become an identity");
+    }
+
+    #[test]
+    fn from_paths_keeps_age_files_before_ssh_keys() {
+        // Order is part of the contract: a node holding both must behave the
+        // same as upstream, or a rebuild that used to succeed starts failing
+        // on a file whose recipients include only one of them.
+        let (id, _) = fresh();
+        let env = MockEnvironment::new()
+            .with_file("/k/age.txt", &id.to_string().expose_secret_for_test())
+            .with_file("/etc/ssh/host", &generated_ssh_key());
+        let ids = AgeIdentities::from_paths(
+            &env,
+            &["/k/age.txt".into()],
+            &["/etc/ssh/host".into()],
+        )
+        .expect("from_paths");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids.sources()[0], IdentitySource::File("/k/age.txt".into()));
+        assert_eq!(ids.sources()[1], IdentitySource::File("/etc/ssh/host".into()));
+    }
+
+    #[test]
+    fn an_unreadable_path_is_skipped_not_fatal() {
+        // A node can boot before /var/lib is mounted while its ssh host key is
+        // already there. Refusing outright would make that a hard failure.
+        let env = MockEnvironment::new().with_file("/etc/ssh/host", &generated_ssh_key());
+        let ids = AgeIdentities::from_paths(
+            &env,
+            &["/var/lib/sops-nix/key.txt".into()],
+            &["/etc/ssh/host".into()],
+        )
+        .expect("an absent age file must not be fatal");
+        assert_eq!(ids.len(), 1, "the ssh key must still be usable");
+    }
+
+    #[test]
+    fn naming_nothing_yields_no_identities_rather_than_an_error() {
+        let env = MockEnvironment::new();
+        let ids = AgeIdentities::from_paths(&env, &[], &[]).expect("no error");
+        assert!(ids.is_empty());
     }
 }
 

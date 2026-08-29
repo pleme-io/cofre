@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "3e24170cdcdfbda74e84c13e6412e4062c1f9f1c153f3fa757f5f617387adea5",
+  "cargo_lock_sha256": "bae8566224527a4e8be4d8e8bc7df0942ae2b2f645f6059d0fcd2f32bec111ac",
   "manifest_sha256": {
     "Cargo.toml": "3e4b3501dc4cd22a669de044a6f1857e7094ff08fc8b6a09f5f0ad4153b23480",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
@@ -10,7 +10,7 @@
     "crates/suminuri-install/Cargo.toml": "33131725337b1bbb980114f5caccaba109527b0203fde26017e229427c3fe9ba",
     "crates/suminuri-wire/Cargo.toml": "d456c4265f7b2a28742dcaf0b8b390cb66e537efa228810edb268ea04b0cbc6c",
     "crates/suminuri-yaml/Cargo.toml": "6f8b21e46ad66408554594d0313eabdd07cdab1dde42590f7c363098299f78c8",
-    "crates/suminuri/Cargo.toml": "9ef08a7d5889021dea731060cdcf9b04562c262c3bb7a61bf429c1831d28f40c"
+    "crates/suminuri/Cargo.toml": "443ee6f4522a3eb1501e4cfb136c75c2ecd796dbee8a817b80681e29132fab3a"
   },
   "target_resolves": {
     "base": {
@@ -8715,7 +8715,8 @@
             "package_key": "age-0.11.5",
             "kind": "normal",
             "features": [
-              "armor"
+              "armor",
+              "ssh"
             ],
             "uses_default_features": true,
             "optional": false,
