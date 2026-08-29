@@ -44,23 +44,29 @@ fn gid_of(name: &str) -> Option<u32> {
 }
 
 impl Fs for RealFs {
-    fn ensure_ramfs(&self, path: &str) -> Result<(), String> {
+    fn ensure_secure_storage(&self, path: &str, user_mode: bool) -> Result<(), String> {
         std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
 
         // ★ IDEMPOTENT. sops-install-secrets runs on EVERY rebuild, and
-        // mounting a second ramfs over the first would stack them — the old
-        // generations still on disk underneath, invisible, and never pruned.
-        // So an existing ramfs here is success, not something to redo.
-        if already_ramfs(path) {
+        // mounting a second backing store over the first would stack them —
+        // old generations still underneath, invisible, never pruned. Storage
+        // that is already secure is success, not something to redo.
+        if already_secure(path) {
             return Ok(());
         }
 
-        // ★ ramfs, NOT tmpfs. tmpfs can be SWAPPED to disk; ramfs cannot.
-        // Decrypted secrets in a tmpfs may be paged to persistent storage
-        // under memory pressure and survive a reboot in swap. The flags match
-        // what upstream mounts, measured on plo:
-        //   rw,nosuid,nodev,noexec,relatime,mode=751
-        mount_ramfs(path)
+        // ★ USER MODE ON LINUX NEEDS NO MOUNT, and that is a PLATFORM fact,
+        // not a mode fact. XDG_RUNTIME_DIR is tmpfs-backed and owned by the
+        // user, so the requirement is already met. Mounting would need
+        // privilege a person does not have and would fail with EPERM.
+        //
+        // It is checked here rather than in the plan because on darwin the
+        // same mode DOES need a ram disk — upstream builds one per user.
+        if user_mode && cfg!(target_os = "linux") {
+            return Ok(());
+        }
+
+        mount_secure(path)
     }
 
     fn make_dir(&self, path: &str) -> Result<(), String> {
@@ -128,7 +134,7 @@ impl Fs for RealFs {
     }
 }
 
-/// Mount a ramfs at `path`.
+/// Create storage at `path` that cannot reach disk.
 ///
 /// ★ Linux-only, and ABSENT rather than stubbed elsewhere. A darwin build
 /// returning `Ok(())` would report a mounted ramfs where none exists, and the
@@ -137,7 +143,7 @@ impl Fs for RealFs {
 /// and for the same reason: a stub that succeeds is worse than a build that
 /// cannot.
 #[cfg(target_os = "linux")]
-fn mount_ramfs(path: &str) -> Result<(), String> {
+fn mount_secure(path: &str) -> Result<(), String> {
     let src = std::ffi::CString::new("none").map_err(|e| e.to_string())?;
     let target = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
     let fstype = std::ffi::CString::new("ramfs").map_err(|e| e.to_string())?;
@@ -162,19 +168,32 @@ fn mount_ramfs(path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn mount_ramfs(path: &str) -> Result<(), String> {
+fn mount_secure(path: &str) -> Result<(), String> {
+    // ★ DARWIN IS NOT IMPLEMENTED, AND SAYS SO. Upstream builds a 64 MiB HFS
+    // ram disk with `hdiutil` + `newfs_hfs` — measured on ryn as
+    // `/dev/disk4 on /private/var/run/secrets.d (hfs, nodev, nosuid,
+    // nobrowse)`, and a second one per user in user mode. There is no ramfs
+    // on macOS.
+    //
+    // Returning Ok(()) here would be the worst available outcome: decrypted
+    // secrets on ordinary, persistent, backed-up storage while every caller
+    // believed they were in unswappable memory.
     Err(format!(
-        "cannot mount a ramfs at {path}: this platform has no ramfs, and reporting \
-         success would place decrypted secrets on a swappable filesystem"
+        "no secure-storage mechanism for {path} on this platform: darwin needs an \
+         hdiutil/newfs_hfs ram disk, which is not implemented. Refusing rather than \
+         writing decrypted secrets to ordinary storage"
     ))
 }
 
-/// Is `path` already a ramfs mount point?
+/// Is `path` already backed by storage that cannot reach disk?
 ///
 /// ★ Read from `/proc/mounts` rather than `statfs`: the fs TYPE is what
 /// matters and `statfs`'s `f_type` for ramfs is the same magic as tmpfs on
 /// some kernels, so the cheap check is the wrong one.
-fn already_ramfs(path: &str) -> bool {
+///
+/// Only `ramfs` counts. tmpfs is deliberately NOT accepted for the system
+/// path: it can be swapped, which is the whole distinction.
+fn already_secure(path: &str) -> bool {
     let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
         return false;
     };
@@ -304,11 +323,11 @@ mod tests {
     }
 
     #[test]
-    fn already_ramfs_reads_proc_mounts_and_is_false_for_a_plain_path() {
+    fn already_secure_reads_proc_mounts_and_is_false_for_a_plain_path() {
         // /tmp is a real path and is not a ramfs on any fleet node; a `true`
         // here would mean the mount is skipped and secrets land on whatever
         // filesystem happens to be there.
-        assert!(!already_ramfs("/definitely/not/mounted/9f3c"));
+        assert!(!already_secure("/definitely/not/mounted/9f3c"));
     }
 
     #[test]

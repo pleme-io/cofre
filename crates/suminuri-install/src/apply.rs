@@ -26,11 +26,17 @@ use crate::manifest::Manifest;
 
 /// Filesystem effects.
 pub trait Fs {
-    /// Ensure `path` is a ramfs mount, mounting one if it is not already.
+    /// Ensure `path` is storage that cannot reach disk.
+    ///
+    /// ★ The MECHANISM is the implementation's business — a `ramfs` mount on
+    /// Linux, an HFS ram disk on darwin — and an implementation with no
+    /// mechanism for its platform must return an error, never `Ok(())`.
+    /// Reporting success would place decrypted secrets on ordinary storage
+    /// while every caller believed otherwise.
     ///
     /// # Errors
-    /// Implementation-defined mount failure.
-    fn ensure_ramfs(&self, path: &str) -> Result<(), String>;
+    /// Implementation-defined.
+    fn ensure_secure_storage(&self, path: &str, user_mode: bool) -> Result<(), String>;
 
     /// Create a directory and any missing parents.
     ///
@@ -143,10 +149,12 @@ pub fn apply<F: Fs, D: Decryptor>(
 
     for step in &steps {
         match step {
-            Step::EnsureRamfs { path } => fs.ensure_ramfs(path).map_err(|d| ApplyError::Fs {
-                step: format!("ensure ramfs at {path}"),
-                detail: d,
-            })?,
+            Step::EnsureSecureStorage { path, user_mode } => fs
+                .ensure_secure_storage(path, *user_mode)
+                .map_err(|d| ApplyError::Fs {
+                    step: format!("secure storage at {path}"),
+                    detail: d,
+                })?,
             Step::MakeGeneration { path } => fs.make_dir(path).map_err(|d| ApplyError::Fs {
                 step: format!("mkdir {path}"),
                 detail: d,
@@ -254,7 +262,7 @@ mod tests {
         }
     }
     impl Fs for SpyFs {
-        fn ensure_ramfs(&self, p: &str) -> Result<(), String> { self.note(&format!("ramfs {p}")) }
+        fn ensure_secure_storage(&self, p: &str, _u: bool) -> Result<(), String> { self.note(&format!("storage {p}")) }
         fn make_dir(&self, p: &str) -> Result<(), String> { self.note(&format!("mkdir {p}")) }
         fn write_restrictive(&self, p: &str, _c: &[u8]) -> Result<(), String> { self.note(&format!("write {p}")) }
         fn chown(&self, p: &str, _o: &crate::place::Ownership) -> Result<(), String> { self.note(&format!("chown {p}")) }

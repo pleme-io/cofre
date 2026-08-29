@@ -33,7 +33,7 @@ use crate::manifest::{Manifest, Secret};
 /// One filesystem action, in the order it must happen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// Ensure the secrets mount point is a **ramfs**, mounting one if not.
+    /// Ensure the secrets mount point is storage that CANNOT REACH DISK.
     ///
     /// ★ ramfs, NOT tmpfs, and the distinction is the security property:
     /// **tmpfs can be swapped to disk; ramfs cannot.** Decrypted secrets in a
@@ -45,7 +45,19 @@ pub enum Step {
     /// byte-for-byte while this was still missing, and it only surfaced when
     /// cleanup hit `Device or resource busy` on upstream's tree. A comparison
     /// of FILES cannot see the filesystem they sit on.
-    EnsureRamfs { path: String },
+    ///
+    /// ★ THE STEP STATES THE REQUIREMENT, NOT THE MECHANISM — and that
+    /// separation is a bug fix. An earlier cut emitted this only when
+    /// `!user_mode`, which encodes a LINUX assumption: there, a user's runtime
+    /// directory is already tmpfs-backed so skipping is right. On darwin
+    /// upstream creates an HFS ram disk **even in user mode** (`/dev/disk5 …
+    /// mounted by luis.d`, measured on ryn), so the same rule would silently
+    /// place a person's secrets on their ordinary filesystem.
+    ///
+    /// The plan therefore always demands secure storage and carries
+    /// `user_mode` as CONTEXT; [`crate::apply::Fs`] decides how — and refuses
+    /// on a platform whose mechanism is not implemented.
+    EnsureSecureStorage { path: String, user_mode: bool },
     /// Create the generation directory.
     MakeGeneration { path: String },
     /// Write a secret's plaintext, restrictively.
@@ -215,15 +227,13 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
     // ★ THE MOUNT COMES FIRST. Creating the generation directory on a plain
     // filesystem and mounting afterwards would hide the already-written
     // secrets under the mount — present on disk, invisible to every reader.
-    let mut steps = Vec::new();
-    // ★ NO RAMFS IN USER MODE. Mounting requires privilege the installer does
-    // not have when it runs as a person, and upstream does not mount either —
-    // the runtime directory is already tmpfs-backed and owned by the user.
-    // Attempting it would fail every user-mode run with EPERM.
-    if !m.user_mode {
-        steps.push(Step::EnsureRamfs { path: mount.clone() });
-    }
-    steps.push(Step::MakeGeneration { path: gen_dir.clone() });
+    // ★ ALWAYS DEMANDED, never conditioned on the mode. Whether a mount is
+    // actually needed is a PLATFORM question the executor answers; the plan's
+    // job is to say the storage must not be able to reach disk.
+    let mut steps = vec![
+        Step::EnsureSecureStorage { path: mount.clone(), user_mode: m.user_mode },
+        Step::MakeGeneration { path: gen_dir.clone() },
+    ];
 
     // ★ USER PASS FIRST. A secret a user's own creation depends on cannot be
     // chowned to that user, so these are placed before the main set.
@@ -353,14 +363,18 @@ mod tests {
     }
 
     #[test]
-    fn user_mode_plans_no_ramfs_mount() {
-        // Mounting needs privilege the installer does not have as a person,
-        // and upstream does not mount either. Attempting it would fail every
-        // user-mode run with EPERM.
+    fn user_mode_still_demands_secure_storage() {
+        // ★ The bug this replaces: an earlier cut skipped the step entirely in
+        // user mode, which is right on Linux (the runtime dir is tmpfs) and
+        // WRONG on darwin, where upstream builds an HFS ram disk even for a
+        // user. The plan states the requirement; the executor picks the
+        // mechanism and refuses where it has none.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
         let steps = plan(&user_mode_manifest(), 1).expect("plan");
-        assert!(!steps.iter().any(|s| matches!(s, Step::EnsureRamfs { .. })));
-        assert!(matches!(steps[0], Step::MakeGeneration { .. }));
+        let Some(Step::EnsureSecureStorage { user_mode, .. }) = steps.first() else {
+            panic!("user mode must still demand secure storage");
+        };
+        assert!(*user_mode, "the mode must reach the executor as context");
     }
 
     #[test]
@@ -370,7 +384,8 @@ mod tests {
         // every step succeeds and the real location stays empty.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
         let steps = plan(&user_mode_manifest(), 7).expect("plan");
-        let Step::MakeGeneration { path } = &steps[0] else { panic!("mkgen") };
+        // steps[0] is EnsureSecureStorage; the generation dir follows it.
+        let Step::MakeGeneration { path } = &steps[1] else { panic!("mkgen") };
         assert_eq!(path, "/run/user/501/secrets.d/7", "%r was not expanded");
         assert!(!path.contains("%r"));
     }
@@ -389,7 +404,7 @@ mod tests {
         // secrets already written there — present on disk, invisible to every
         // reader, and the run would report success.
         let steps = plan(&m(), 7).expect("plan");
-        assert!(matches!(steps[0], Step::EnsureRamfs { .. }), "mount must be first");
+        assert!(matches!(steps[0], Step::EnsureSecureStorage { .. }), "storage must be first");
         assert!(matches!(steps[1], Step::MakeGeneration { .. }));
     }
 
