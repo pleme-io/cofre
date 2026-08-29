@@ -7,8 +7,24 @@ homepage.workspace = true
 description = "suminuri-install — the sops-install-secrets drop-in: parse the manifest, place the secrets."
 
 [dependencies]
+# ★ THE ssh-ed25519 -> age GAP NEEDS NO NEW CRYPTOGRAPHY. age 0.11 already
+# ships `age::ssh::Identity::from_buffer` behind its `ssh` feature, and cofre
+# already depends on the crate (suminuri, with `armor`). The gap named in the
+# first commit closes with a feature flag, not a birational map written by
+# hand -- which is the right outcome for the one place in this fleet where
+# rolling our own would be least defensible.
+age = { version = "0.11", features = ["ssh", "armor"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [lints.clippy]
 pedantic = "warn"
+
+[dev-dependencies]
+# ★ Generates an ed25519 key AT TEST TIME so no private-key material is
+# committed. The first version of this test embedded a throwaway key and the
+# pre-commit hook refused it -- correctly. "It is only a test fixture" is the
+# rationalization that guard exists to stop, and the guard does not get to be
+# right only when it is convenient.
+ssh-key = { version = "0.6", features = ["ed25519", "alloc", "rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
