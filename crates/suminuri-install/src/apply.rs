@@ -235,6 +235,24 @@ pub fn apply<F: Fs, D: Decryptor>(
                     })?;
                 written += 1;
             }
+            Step::LinkOutOfTree { link, target } => {
+                // ★ The parent may not exist. zek's kubeconfig-rio declares
+                // /home/luis/.kube/configs/rio, and `.kube/configs` is created
+                // by this install or not at all -- there is no earlier step
+                // that would have made it.
+                if let Some(parent) = std::path::Path::new(link).parent() {
+                    fs.make_dir(&parent.to_string_lossy())
+                        .map_err(|detail| ApplyError::Fs {
+                            step: format!("mkdir for out-of-tree link {link}"),
+                            detail,
+                        })?;
+                }
+                // Reuses the atomic swap: an out-of-tree link is usually being
+                // REPLACED on every activation, and unlink-then-symlink would
+                // leave a window with the operator's path simply absent.
+                fs.swap_symlink(link, target)
+                    .map_err(|detail| ApplyError::Swap { detail })?;
+            }
             Step::SwapSymlink { link, target } => {
                 fs.swap_symlink(link, target)
                     .map_err(|d| ApplyError::Swap { detail: d })?;
