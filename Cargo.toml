@@ -8,6 +8,7 @@ members = [
     "crates/suminuri-wire",
     "crates/suminuri-yaml",
     "crates/suminuri",
+    "crates/suminuri-install",
 ]
 
 [workspace.package]

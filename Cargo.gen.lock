@@ -1,12 +1,13 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "8865ebea5a876bc8e3c911154fa7a1ca3026cc97884fb14f74ce057475cfa54b",
+  "cargo_lock_sha256": "ca2e3e4ec332f01f625d6e890643a4a9e919b9f6c4067517f51587af074e8fe7",
   "manifest_sha256": {
-    "Cargo.toml": "c379eae7550161b9d80bd9890a38c97d5d92aaf9c99e363e713df6139bb8d15a",
+    "Cargo.toml": "e2832659827eb1b7ddb6db9efa6c70be0dd45f76ed1267a1b1d66db49ca7fdc1",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "c31f6d3035dfc9573027255aea6b1da75e14e41faec9a3f5a2eb9b7b1b31fea2",
     "crates/cofre/Cargo.toml": "11ae0fa5289008f3934e76b5a20f7190e5138d6190d9e4d322a54257412bc0c9",
+    "crates/suminuri-install/Cargo.toml": "1c0107f4df35641da86e7a205ef35b22df23374e9137f515ca6be10762b5cf00",
     "crates/suminuri-wire/Cargo.toml": "d456c4265f7b2a28742dcaf0b8b390cb66e537efa228810edb268ea04b0cbc6c",
     "crates/suminuri-yaml/Cargo.toml": "6f8b21e46ad66408554594d0313eabdd07cdab1dde42590f7c363098299f78c8",
     "crates/suminuri/Cargo.toml": "9ef08a7d5889021dea731060cdcf9b04562c262c3bb7a61bf429c1831d28f40c"
@@ -7094,6 +7095,34 @@
         "build_dependencies": [],
         "features": []
       },
+      "suminuri-install-0.1.14": {
+        "runtime_dependencies": [
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.228",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.150",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "suminuri-wire-0.1.14": {
         "runtime_dependencies": [
           {
@@ -12210,6 +12239,13 @@
           "path": "src/main.rs"
         }
       ]
+    },
+    "suminuri-install-0.1.14": {
+      "edition": "2024",
+      "lib_target": {
+        "name": "suminuri_install",
+        "path": "src/lib.rs"
+      }
     },
     "suminuri-wire-0.1.14": {
       "edition": "2024",

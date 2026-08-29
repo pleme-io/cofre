@@ -2321,6 +2321,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "suminuri-install"
+version = "0.1.14"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "suminuri-wire"
 version = "0.1.14"
 dependencies = [
