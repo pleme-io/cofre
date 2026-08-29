@@ -74,6 +74,12 @@ pub enum ApplyError {
     Decrypt { file: String, key: String, detail: String },
     /// A filesystem step failed. Also unpublished.
     Fs { step: String, detail: String },
+    /// A template could not be rendered. Also unpublished.
+    ///
+    /// ★ Separate from `Fs` because the remedy is different: a template
+    /// failure means the manifest and the secrets disagree, not that the disk
+    /// misbehaved.
+    Template { detail: String },
     /// ★ The swap ITSELF failed — the one failure where the generation is
     /// complete and correct but unreachable. Named separately because the
     /// remedy differs: everything is on disk, and re-running succeeds.
@@ -89,6 +95,9 @@ impl std::fmt::Display for ApplyError {
             }
             Self::Fs { step, detail } => {
                 write!(f, "{step}: {detail} — generation not published")
+            }
+            Self::Template { detail } => {
+                write!(f, "{detail} — generation not published")
             }
             Self::Swap { detail } => write!(
                 f,
@@ -119,6 +128,12 @@ pub fn apply<F: Fs, D: Decryptor>(
 ) -> Result<Applied, ApplyError> {
     let steps = plan(m, generation).map_err(ApplyError::Plan)?;
     let mut written = 0usize;
+    // ★ Plaintexts are kept because TEMPLATES ARE RENDERED FROM THEM. Holding
+    // them for the length of one run is what upstream does too; the
+    // alternative is decrypting each referenced secret a second time, which
+    // doubles the MAC verifications for no gain.
+    let mut values: std::collections::BTreeMap<String, Vec<u8>> =
+        std::collections::BTreeMap::new();
 
     for step in &steps {
         match step {
@@ -138,6 +153,7 @@ pub fn apply<F: Fs, D: Decryptor>(
                     })?;
                 fs.write_restrictive(path, &plaintext)
                     .map_err(|d| ApplyError::Fs { step: format!("write {path}"), detail: d })?;
+                values.insert(key.clone(), plaintext);
                 written += 1;
             }
             Step::Chown { path, own } => {
@@ -151,6 +167,28 @@ pub fn apply<F: Fs, D: Decryptor>(
                     step: format!("chmod {path}"),
                     detail: d,
                 })?;
+            }
+            Step::RenderTemplate { path, name, content, references } => {
+                // ★ `references` is checked against what we actually hold, so
+                // a template naming a secret the manifest never placed fails
+                // HERE with both names rather than as a stray marker later.
+                for r in references {
+                    if !values.contains_key(r) {
+                        return Err(ApplyError::Template {
+                            detail: format!("template {name}: {r} was never placed"),
+                        });
+                    }
+                }
+                let body = crate::template::render(
+                    name,
+                    content,
+                    &m.placeholder_by_secret_name,
+                    &values,
+                )
+                .map_err(|e| ApplyError::Template { detail: e.to_string() })?;
+                fs.write_restrictive(path, body.as_bytes())
+                    .map_err(|d| ApplyError::Fs { step: format!("write {path}"), detail: d })?;
+                written += 1;
             }
             Step::SwapSymlink { link, target } => {
                 fs.swap_symlink(link, target)

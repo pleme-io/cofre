@@ -203,6 +203,16 @@ impl Manifest {
     }
 }
 
+impl Template {
+    /// The mode as octal. Same string-not-integer reasoning as [`Secret::mode`].
+    ///
+    /// # Errors
+    /// The string if it is not valid octal.
+    pub fn mode_octal(&self) -> Result<u32, &str> {
+        u32::from_str_radix(self.mode.trim_start_matches("0o"), 8).map_err(|_| self.mode.as_str())
+    }
+}
+
 impl Secret {
     /// The mode as octal.
     ///
