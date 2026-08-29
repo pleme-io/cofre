@@ -57,8 +57,29 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // ── ★ UPSTREAM'S FLAGS ARE GO-STYLE, SINGLE-DASH ────────────────────────
+    //
+    // sops-nix invokes this at BUILD time as
+    //
+    //     sops-install-secrets -check-mode=sopsfile <manifest.json>
+    //
+    // read off zek's manifest.json.drv. Go's `flag` package uses one dash, and
+    // the original parser took "any argument not starting with `--`" as the
+    // manifest path -- so `-check-mode=sopsfile` WAS the path, and the build
+    // died with "cannot read the manifest: No such file or directory (os error
+    // 2)" naming a file nobody asked for.
+    //
+    // ★ A drop-in's argument grammar is part of its interface, exactly like its
+    // binary name. Both were invisible to every behavioural differential: those
+    // called this program with the arguments WE chose, never the ones the
+    // caller sends.
     let dry = args.iter().any(|a| a == "--dry-run");
-    let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
+    let check_mode = args.iter().find_map(|a| {
+        a.strip_prefix("-check-mode=")
+            .or_else(|| a.strip_prefix("--check-mode="))
+    });
+    // The manifest is the first argument that is not a flag in EITHER grammar.
+    let Some(path) = args.iter().find(|a| !a.starts_with('-')) else {
         return usage();
     };
 
@@ -69,6 +90,35 @@ pub fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // ── ★ CHECK MODE: VALIDATE, INSTALL NOTHING ─────────────────────────────
+    //
+    // Upstream runs this inside a nix builder to fail a BUILD on a bad manifest
+    // rather than an activation on a live host. The mode names what to check;
+    // `sopsfile` is the one sops-nix actually passes.
+    //
+    // Installing here would be a serious bug -- a sandboxed builder has no
+    // /run/secrets, no identities and no business writing anything -- so this
+    // returns BEFORE any step is executed.
+    if let Some(mode) = check_mode {
+        // The manifest already parsed above; that is most of the check. The
+        // rest is that it PLANS, which is where a bad mode string, a missing
+        // ownership or an unresolvable runtime specifier surfaces.
+        return match plan(&manifest, 0) {
+            Ok(steps) => {
+                eprintln!(
+                    "suminuri-install-secrets: check-mode={mode} OK — {} entries, {} steps, nothing installed",
+                    manifest.secrets.len(),
+                    steps.len()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("suminuri-install-secrets: check-mode={mode} FAILED: {e:?}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     let gen_id = generation();
     eprintln!(
