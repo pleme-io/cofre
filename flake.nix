@@ -35,6 +35,25 @@
         member = "suminuri";
       };
 
+      # ── The third binary: front 3's drop-in ─────────────────────────────────
+      #
+      # `suminuri-install-secrets` replaces sops-nix's `sops-install-secrets`
+      # PROGRAM, not the sops CLI. That distinction is the whole reason it is a
+      # separate member: sops-install-secrets links sops as a Go *library*, so no
+      # PATH substitution can reach it — the only supported seam is sops-nix's
+      # `sops.package`, and what belongs there is a program with the same argv
+      # and manifest contract, which suminuri (a different argv contract
+      # entirely) is not.
+      #
+      # Packaged here so `pleme.suminuri.installSecretsPackage` in the nix repo
+      # has something to point at. That option has been declared-and-refused
+      # since it was written, for the stated reason that "the drop-in binary does
+      # not exist". It exists now.
+      suminuri-install = substrate.rust.workspace {
+        src = ./.;
+        member = "suminuri-install";
+      };
+
       # Per-system merge, cofre last so it wins.
       mergeBySystem =
         attr:
@@ -50,7 +69,16 @@
               # cofre's, and its bare `default`/`host-tool`/`unwrapped` are
               # dropped — a consumer asking this flake for `default` means cofre,
               # and silently changing that would be the surprise.
+              # Same treatment for both non-cofre members: drop the bare
+              # `default`/`host-tool`/`unwrapped` so a consumer asking this flake
+              # for `default` still means cofre. Silently changing that would be
+              # the surprise.
               (removeAttrs (suminuri.${attr}.${system} or { }) [
+                "default"
+                "host-tool"
+                "unwrapped"
+              ])
+              // (removeAttrs (suminuri-install.${attr}.${system} or { }) [
                 "default"
                 "host-tool"
                 "unwrapped"
