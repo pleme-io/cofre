@@ -70,7 +70,10 @@ fn main() -> ExitCode {
                 for s in &steps {
                     println!("{s:?}");
                 }
-                eprintln!("suminuri-install-secrets: {} steps, nothing executed", steps.len());
+                eprintln!(
+                    "suminuri-install-secrets: {} steps, nothing executed",
+                    steps.len()
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -99,9 +102,17 @@ fn main() -> ExitCode {
             );
             return ExitCode::FAILURE;
         }
-        eprintln!("suminuri-install-secrets: {} identity/identities", identities.len());
+        eprintln!(
+            "suminuri-install-secrets: {} identity/identities",
+            identities.len()
+        );
 
-        match apply(&manifest, gen_id, &RealFs, &SuminuriDecryptor::new(identities)) {
+        match apply(
+            &manifest,
+            gen_id,
+            &RealFs,
+            &SuminuriDecryptor::new(identities),
+        ) {
             Ok(a) => {
                 eprintln!(
                     "suminuri-install-secrets: generation {} published, {} written",

@@ -35,7 +35,10 @@ pub enum TemplateError {
 impl std::fmt::Display for TemplateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnresolvedPlaceholders { template, remaining } => write!(
+            Self::UnresolvedPlaceholders {
+                template,
+                remaining,
+            } => write!(
                 f,
                 "template {template}: {remaining} placeholder(s) unresolved — refusing, \
                  because a rendered marker would be written as if it were the credential"
@@ -114,9 +117,18 @@ mod tests {
 
     fn table() -> BTreeMap<String, String> {
         [
-            ("tunnel/id".to_string(), "<SOPS:aaa:PLACEHOLDER>".to_string()),
-            ("tunnel/sec".to_string(), "<SOPS:bbb:PLACEHOLDER>".to_string()),
-            ("unrelated".to_string(), "<SOPS:ccc:PLACEHOLDER>".to_string()),
+            (
+                "tunnel/id".to_string(),
+                "<SOPS:aaa:PLACEHOLDER>".to_string(),
+            ),
+            (
+                "tunnel/sec".to_string(),
+                "<SOPS:bbb:PLACEHOLDER>".to_string(),
+            ),
+            (
+                "unrelated".to_string(),
+                "<SOPS:ccc:PLACEHOLDER>".to_string(),
+            ),
         ]
         .into_iter()
         .collect()
@@ -133,7 +145,8 @@ mod tests {
 
     #[test]
     fn a_body_is_rendered_from_its_referenced_secrets() {
-        let body = r#"{"TunnelID":"<SOPS:aaa:PLACEHOLDER>","TunnelSecret":"<SOPS:bbb:PLACEHOLDER>"}"#;
+        let body =
+            r#"{"TunnelID":"<SOPS:aaa:PLACEHOLDER>","TunnelSecret":"<SOPS:bbb:PLACEHOLDER>"}"#;
         let out = render("cloudflared", body, &table(), &values()).expect("render");
         assert_eq!(out, r#"{"TunnelID":"ID","TunnelSecret":"SEC"}"#);
     }
@@ -147,7 +160,10 @@ mod tests {
         let body = r#"{"a":"<SOPS:aaa:PLACEHOLDER>","b":"<SOPS:zzz:PLACEHOLDER>"}"#;
         assert_eq!(
             render("t", body, &table(), &values()),
-            Err(TemplateError::UnresolvedPlaceholders { template: "t".into(), remaining: 1 })
+            Err(TemplateError::UnresolvedPlaceholders {
+                template: "t".into(),
+                remaining: 1
+            })
         );
     }
 
@@ -168,14 +184,20 @@ mod tests {
         let body = r#"{"x":"<SOPS:ddd:PLACEHOLDER>"}"#;
         assert_eq!(
             render("t", body, &t, &values()),
-            Err(TemplateError::MissingValue { template: "t".into(), secret: "absent".into() })
+            Err(TemplateError::MissingValue {
+                template: "t".into(),
+                secret: "absent".into()
+            })
         );
     }
 
     #[test]
     fn a_body_with_no_markers_renders_unchanged() {
         let body = "plain content\n";
-        assert_eq!(render("t", body, &table(), &values()).expect("render"), body);
+        assert_eq!(
+            render("t", body, &table(), &values()).expect("render"),
+            body
+        );
     }
 
     #[test]
@@ -183,7 +205,10 @@ mod tests {
         // `replace` handles this, but a hand-rolled find-first would not, and
         // the failure would be a half-rendered credential.
         let body = "<SOPS:aaa:PLACEHOLDER>-<SOPS:aaa:PLACEHOLDER>";
-        assert_eq!(render("t", body, &table(), &values()).expect("render"), "ID-ID");
+        assert_eq!(
+            render("t", body, &table(), &values()).expect("render"),
+            "ID-ID"
+        );
     }
 
     #[test]

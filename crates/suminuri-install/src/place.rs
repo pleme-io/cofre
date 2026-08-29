@@ -57,17 +57,32 @@ pub enum Step {
     /// The plan therefore always demands secure storage and carries
     /// `user_mode` as CONTEXT; [`crate::apply::Fs`] decides how — and refuses
     /// on a platform whose mechanism is not implemented.
-    EnsureSecureStorage { path: String, user_mode: bool },
+    EnsureSecureStorage {
+        path: String,
+        user_mode: bool,
+    },
     /// Create the generation directory.
-    MakeGeneration { path: String },
+    MakeGeneration {
+        path: String,
+    },
     /// Write a secret's plaintext, restrictively.
     ///
     /// ★ `mode` here is ALWAYS the restrictive create mode, never the
     /// secret's declared one — see ordering rule 1.
-    Write { path: String, key: String, from_file: String },
+    Write {
+        path: String,
+        key: String,
+        from_file: String,
+    },
     /// Set ownership, then permissions. Both, in this order, per entry.
-    Chown { path: String, own: Ownership },
-    Chmod { path: String, mode: u32 },
+    Chown {
+        path: String,
+        own: Ownership,
+    },
+    Chmod {
+        path: String,
+        mode: u32,
+    },
     /// Render a template body and write it.
     ///
     /// ★ Carries the SECRETS IT REFERENCES, not just its content. That makes
@@ -81,9 +96,14 @@ pub enum Step {
         references: Vec<String>,
     },
     /// Point `/run/secrets` at the completed generation, atomically.
-    SwapSymlink { link: String, target: String },
+    SwapSymlink {
+        link: String,
+        target: String,
+    },
     /// Remove a generation older than `keepGenerations`.
-    RemoveGeneration { path: String },
+    RemoveGeneration {
+        path: String,
+    },
 }
 
 /// How an entry's ownership is expressed.
@@ -174,9 +194,14 @@ fn resolve_runtime_specifier(mount: &str) -> Result<String, PlanError> {
 /// A template's ownership, same two forms as an entry's.
 fn template_ownership(t: &crate::manifest::Template) -> Result<Ownership, PlanError> {
     match (&t.owner, &t.group, t.uid, t.gid) {
-        (Some(o), Some(g), _, _) => Ok(Ownership::ByName { owner: o.clone(), group: g.clone() }),
+        (Some(o), Some(g), _, _) => Ok(Ownership::ByName {
+            owner: o.clone(),
+            group: g.clone(),
+        }),
         (_, _, Some(uid), Some(gid)) => Ok(Ownership::ByIds { uid, gid }),
-        _ => Err(PlanError::NoOwnership { entry: t.name.clone() }),
+        _ => Err(PlanError::NoOwnership {
+            entry: t.name.clone(),
+        }),
     }
 }
 
@@ -188,7 +213,9 @@ fn ownership_of(s: &Secret) -> Result<Ownership, PlanError> {
             group: g.clone(),
         }),
         (_, _, Some(uid), Some(gid)) => Ok(Ownership::ByIds { uid, gid }),
-        _ => Err(PlanError::NoOwnership { entry: s.name.clone() }),
+        _ => Err(PlanError::NoOwnership {
+            entry: s.name.clone(),
+        }),
     }
 }
 
@@ -209,7 +236,10 @@ fn steps_for(secret: &Secret, gen_dir: &str, user_mode: bool) -> Result<Vec<Step
     // because there is nothing to express. Guessing root here would chown a
     // person's own secrets away from them.
     if !user_mode {
-        steps.push(Step::Chown { path: path.clone(), own: ownership_of(secret)? });
+        steps.push(Step::Chown {
+            path: path.clone(),
+            own: ownership_of(secret)?,
+        });
     }
     steps.push(Step::Chmod { path, mode });
     Ok(steps)
@@ -231,8 +261,13 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
     // actually needed is a PLATFORM question the executor answers; the plan's
     // job is to say the storage must not be able to reach disk.
     let mut steps = vec![
-        Step::EnsureSecureStorage { path: mount.clone(), user_mode: m.user_mode },
-        Step::MakeGeneration { path: gen_dir.clone() },
+        Step::EnsureSecureStorage {
+            path: mount.clone(),
+            user_mode: m.user_mode,
+        },
+        Step::MakeGeneration {
+            path: gen_dir.clone(),
+        },
     ];
 
     // ★ USER PASS FIRST. A secret a user's own creation depends on cannot be
@@ -266,7 +301,10 @@ pub fn plan(m: &Manifest, generation: u64) -> Result<Vec<Step>, PlanError> {
             references: crate::template::referenced(&t.content, &m.placeholder_by_secret_name),
         });
         if !m.user_mode {
-            steps.push(Step::Chown { path: path.clone(), own: template_ownership(t)? });
+            steps.push(Step::Chown {
+                path: path.clone(),
+                own: template_ownership(t)?,
+            });
         }
         steps.push(Step::Chmod { path, mode });
     }
@@ -293,7 +331,10 @@ pub fn prune(present: &[u64], current: u64, keep: u32) -> Vec<u64> {
     let mut older: Vec<u64> = present.iter().copied().filter(|g| *g < current).collect();
     older.sort_unstable_by(|a, b| b.cmp(a));
     // keep - 1 older ones, because `current` itself counts toward the budget.
-    older.into_iter().skip((keep as usize).saturating_sub(1)).collect()
+    older
+        .into_iter()
+        .skip((keep as usize).saturating_sub(1))
+        .collect()
 }
 
 #[cfg(test)]
@@ -314,7 +355,9 @@ mod tests {
       ]
     }"#;
 
-    fn m() -> Manifest { serde_json::from_str(M).expect("manifest") }
+    fn m() -> Manifest {
+        serde_json::from_str(M).expect("manifest")
+    }
 
     #[test]
     fn ownership_is_set_before_permissions_for_every_secret() {
@@ -324,7 +367,10 @@ mod tests {
         let mut seen_chown = false;
         for w in steps.windows(2) {
             if let (Step::Chown { path: cp, .. }, Step::Chmod { path: mp, .. }) = (&w[0], &w[1]) {
-                assert_eq!(cp, mp, "chown and chmod must target the same path, adjacently");
+                assert_eq!(
+                    cp, mp,
+                    "chown and chmod must target the same path, adjacently"
+                );
                 seen_chown = true;
             }
         }
@@ -333,8 +379,14 @@ mod tests {
 
     fn user_mode_manifest() -> Manifest {
         let raw = M
-            .replace("\"secretsMountPoint\": \"/run/secrets.d\"", "\"secretsMountPoint\": \"%r/secrets.d\"")
-            .replace("\"keepGenerations\": 2,", "\"keepGenerations\": 2, \"userMode\": true,")
+            .replace(
+                "\"secretsMountPoint\": \"/run/secrets.d\"",
+                "\"secretsMountPoint\": \"%r/secrets.d\"",
+            )
+            .replace(
+                "\"keepGenerations\": 2,",
+                "\"keepGenerations\": 2, \"userMode\": true,",
+            )
             .replace("\"owner\":\"root\"", "\"owner\":null")
             .replace("\"owner\":\"luis\"", "\"owner\":null")
             .replace("\"group\":\"root\"", "\"group\":null")
@@ -359,7 +411,10 @@ mod tests {
             !steps.iter().any(|s| matches!(s, Step::Chown { .. })),
             "user mode must plan no chown"
         );
-        assert!(steps.iter().any(|s| matches!(s, Step::Chmod { .. })), "mode still applies");
+        assert!(
+            steps.iter().any(|s| matches!(s, Step::Chmod { .. })),
+            "mode still applies"
+        );
     }
 
     #[test]
@@ -385,7 +440,9 @@ mod tests {
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/501") };
         let steps = plan(&user_mode_manifest(), 7).expect("plan");
         // steps[0] is EnsureSecureStorage; the generation dir follows it.
-        let Step::MakeGeneration { path } = &steps[1] else { panic!("mkgen") };
+        let Step::MakeGeneration { path } = &steps[1] else {
+            panic!("mkgen")
+        };
         assert_eq!(path, "/run/user/501/secrets.d/7", "%r was not expanded");
         assert!(!path.contains("%r"));
     }
@@ -404,7 +461,10 @@ mod tests {
         // secrets already written there — present on disk, invisible to every
         // reader, and the run would report success.
         let steps = plan(&m(), 7).expect("plan");
-        assert!(matches!(steps[0], Step::EnsureSecureStorage { .. }), "storage must be first");
+        assert!(
+            matches!(steps[0], Step::EnsureSecureStorage { .. }),
+            "storage must be first"
+        );
         assert!(matches!(steps[1], Step::MakeGeneration { .. }));
     }
 
@@ -413,7 +473,10 @@ mod tests {
         // Rule 2. Nothing may point at a generation that is not complete.
         let steps = plan(&m(), 7).expect("plan");
         assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })));
-        let swaps = steps.iter().filter(|s| matches!(s, Step::SwapSymlink { .. })).count();
+        let swaps = steps
+            .iter()
+            .filter(|s| matches!(s, Step::SwapSymlink { .. }))
+            .count();
         assert_eq!(swaps, 1, "exactly one swap, at the end");
     }
 
@@ -421,9 +484,14 @@ mod tests {
     fn the_user_pass_is_planned_before_the_main_pass() {
         let steps = plan(&m(), 7).expect("plan");
         let pos = |name: &str| {
-            steps.iter().position(|s| matches!(s, Step::Write { path, .. } if path.ends_with(name)))
+            steps
+                .iter()
+                .position(|s| matches!(s, Step::Write { path, .. } if path.ends_with(name)))
         };
-        assert!(pos("svc/alpha") < pos("a/b"), "neededForUsers secrets must be placed first");
+        assert!(
+            pos("svc/alpha") < pos("a/b"),
+            "neededForUsers secrets must be placed first"
+        );
     }
 
     #[test]
@@ -434,7 +502,10 @@ mod tests {
         let bm: Manifest = serde_json::from_str(&broken).expect("parse");
         assert_eq!(
             plan(&bm, 1),
-            Err(PlanError::BadMode { entry: "a/b".into(), mode: "not-octal".into() })
+            Err(PlanError::BadMode {
+                entry: "a/b".into(),
+                mode: "not-octal".into()
+            })
         );
     }
 
@@ -445,7 +516,10 @@ mod tests {
         let steps = plan(&m(), 7).expect("plan");
         for s in &steps {
             if let Step::Write { path, .. } = s {
-                assert!(path.starts_with("/run/secrets.d/7/"), "wrote outside the generation: {path}");
+                assert!(
+                    path.starts_with("/run/secrets.d/7/"),
+                    "wrote outside the generation: {path}"
+                );
             }
         }
     }
@@ -456,10 +530,18 @@ mod tests {
         // secret asked for".
         assert_eq!(CREATE_MODE, 0o600);
         let steps = plan(&m(), 7).expect("plan");
-        let modes: Vec<u32> = steps.iter().filter_map(|s| match s {
-            Step::Chmod { mode, .. } => Some(*mode), _ => None }).collect();
+        let modes: Vec<u32> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Chmod { mode, .. } => Some(*mode),
+                _ => None,
+            })
+            .collect();
         assert!(modes.contains(&0o400) && modes.contains(&0o440));
-        assert!(!modes.contains(&CREATE_MODE), "the create mode is not a declared mode here");
+        assert!(
+            !modes.contains(&CREATE_MODE),
+            "the create mode is not a declared mode here"
+        );
     }
 
     #[test]
@@ -484,8 +566,14 @@ mod tests {
             .iter()
             .position(|s| matches!(s, Step::RenderTemplate { .. }))
             .expect("a template render");
-        assert!(render > last_write, "a template was planned before an entry it may reference");
-        assert!(matches!(steps.last(), Some(Step::SwapSymlink { .. })), "swap still last");
+        assert!(
+            render > last_write,
+            "a template was planned before an entry it may reference"
+        );
+        assert!(
+            matches!(steps.last(), Some(Step::SwapSymlink { .. })),
+            "swap still last"
+        );
     }
 
     #[test]
@@ -498,13 +586,27 @@ mod tests {
         );
         let m: Manifest = serde_json::from_str(&with_t).expect("parse");
         let steps = plan(&m, 1).expect("plan");
-        let r = steps.iter().position(|s| matches!(s, Step::RenderTemplate { .. })).expect("render");
-        assert!(matches!(steps[r + 1], Step::Chown { .. }), "chown must follow the render");
-        assert!(matches!(steps[r + 2], Step::Chmod { .. }), "chmod must follow the chown");
+        let r = steps
+            .iter()
+            .position(|s| matches!(s, Step::RenderTemplate { .. }))
+            .expect("render");
+        assert!(
+            matches!(steps[r + 1], Step::Chown { .. }),
+            "chown must follow the render"
+        );
+        assert!(
+            matches!(steps[r + 2], Step::Chmod { .. }),
+            "chmod must follow the chown"
+        );
         // ★ And it lands under rendered/, which is where upstream puts it —
         // established by differential, not by reading upstream's source.
-        let Step::RenderTemplate { path, .. } = &steps[r] else { panic!("render") };
-        assert!(path.contains("/rendered/"), "templates nest under rendered/: {path}");
+        let Step::RenderTemplate { path, .. } = &steps[r] else {
+            panic!("render")
+        };
+        assert!(
+            path.contains("/rendered/"),
+            "templates nest under rendered/: {path}"
+        );
     }
 
     #[test]

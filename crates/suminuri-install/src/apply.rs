@@ -21,8 +21,8 @@
 //! debugging why secrets did not update can read exactly how far it got.
 //! Pruning removes it on the next successful run.
 
-use crate::place::{PlanError, Step, plan};
 use crate::manifest::Manifest;
+use crate::place::{PlanError, Step, plan};
 
 /// Filesystem effects.
 pub trait Fs {
@@ -83,19 +83,30 @@ pub trait Decryptor {
 pub enum ApplyError {
     Plan(PlanError),
     /// A decrypt failed. The generation is abandoned unpublished.
-    Decrypt { file: String, key: String, detail: String },
+    Decrypt {
+        file: String,
+        key: String,
+        detail: String,
+    },
     /// A filesystem step failed. Also unpublished.
-    Fs { step: String, detail: String },
+    Fs {
+        step: String,
+        detail: String,
+    },
     /// A template could not be rendered. Also unpublished.
     ///
     /// ★ Separate from `Fs` because the remedy is different: a template
     /// failure means the manifest and the secrets disagree, not that the disk
     /// misbehaved.
-    Template { detail: String },
+    Template {
+        detail: String,
+    },
     /// ★ The swap ITSELF failed — the one failure where the generation is
     /// complete and correct but unreachable. Named separately because the
     /// remedy differs: everything is on disk, and re-running succeeds.
-    Swap { detail: String },
+    Swap {
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for ApplyError {
@@ -103,7 +114,10 @@ impl std::fmt::Display for ApplyError {
         match self {
             Self::Plan(e) => write!(f, "{e}"),
             Self::Decrypt { file, key, detail } => {
-                write!(f, "decrypting {key} from {file}: {detail} — generation not published")
+                write!(
+                    f,
+                    "decrypting {key} from {file}: {detail} — generation not published"
+                )
             }
             Self::Fs { step, detail } => {
                 write!(f, "{step}: {detail} — generation not published")
@@ -144,8 +158,7 @@ pub fn apply<F: Fs, D: Decryptor>(
     // them for the length of one run is what upstream does too; the
     // alternative is decrypting each referenced secret a second time, which
     // doubles the MAC verifications for no gain.
-    let mut values: std::collections::BTreeMap<String, Vec<u8>> =
-        std::collections::BTreeMap::new();
+    let mut values: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
 
     for step in &steps {
         match step {
@@ -159,18 +172,26 @@ pub fn apply<F: Fs, D: Decryptor>(
                 step: format!("mkdir {path}"),
                 detail: d,
             })?,
-            Step::Write { path, key, from_file } => {
+            Step::Write {
+                path,
+                key,
+                from_file,
+            } => {
                 // ★ Decrypt, then write. A decrypt failure must not leave a
                 // zero-length file behind that a later reader could mistake
                 // for an empty secret.
-                let plaintext =
-                    dec.extract(from_file, key).map_err(|d| ApplyError::Decrypt {
+                let plaintext = dec
+                    .extract(from_file, key)
+                    .map_err(|d| ApplyError::Decrypt {
                         file: from_file.clone(),
                         key: key.clone(),
                         detail: d,
                     })?;
                 fs.write_restrictive(path, &plaintext)
-                    .map_err(|d| ApplyError::Fs { step: format!("write {path}"), detail: d })?;
+                    .map_err(|d| ApplyError::Fs {
+                        step: format!("write {path}"),
+                        detail: d,
+                    })?;
                 values.insert(key.clone(), plaintext);
                 written += 1;
             }
@@ -186,7 +207,12 @@ pub fn apply<F: Fs, D: Decryptor>(
                     detail: d,
                 })?;
             }
-            Step::RenderTemplate { path, name, content, references } => {
+            Step::RenderTemplate {
+                path,
+                name,
+                content,
+                references,
+            } => {
                 // ★ `references` is checked against what we actually hold, so
                 // a template naming a secret the manifest never placed fails
                 // HERE with both names rather than as a stray marker later.
@@ -197,15 +223,16 @@ pub fn apply<F: Fs, D: Decryptor>(
                         });
                     }
                 }
-                let body = crate::template::render(
-                    name,
-                    content,
-                    &m.placeholder_by_secret_name,
-                    &values,
-                )
-                .map_err(|e| ApplyError::Template { detail: e.to_string() })?;
+                let body =
+                    crate::template::render(name, content, &m.placeholder_by_secret_name, &values)
+                        .map_err(|e| ApplyError::Template {
+                            detail: e.to_string(),
+                        })?;
                 fs.write_restrictive(path, body.as_bytes())
-                    .map_err(|d| ApplyError::Fs { step: format!("write {path}"), detail: d })?;
+                    .map_err(|d| ApplyError::Fs {
+                        step: format!("write {path}"),
+                        detail: d,
+                    })?;
                 written += 1;
             }
             Step::SwapSymlink { link, target } => {
@@ -221,7 +248,11 @@ pub fn apply<F: Fs, D: Decryptor>(
             }
         }
     }
-    Ok(Applied { generation, written, pruned: Vec::new() })
+    Ok(Applied {
+        generation,
+        written,
+        pruned: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -239,7 +270,9 @@ mod tests {
          "restartUnits":[],"sopsFile":"/nix/store/x.yaml","uid":0}
       ]
     }"#;
-    fn m() -> Manifest { serde_json::from_str(M).expect("manifest") }
+    fn m() -> Manifest {
+        serde_json::from_str(M).expect("manifest")
+    }
 
     #[derive(Default)]
     struct SpyFs {
@@ -248,7 +281,10 @@ mod tests {
     }
     impl SpyFs {
         fn failing(what: &'static str) -> Self {
-            Self { log: RefCell::new(Vec::new()), fail_on: Some(what) }
+            Self {
+                log: RefCell::new(Vec::new()),
+                fail_on: Some(what),
+            }
         }
         fn note(&self, what: &str) -> Result<(), String> {
             self.log.borrow_mut().push(what.to_owned());
@@ -262,22 +298,40 @@ mod tests {
         }
     }
     impl Fs for SpyFs {
-        fn ensure_secure_storage(&self, p: &str, _u: bool) -> Result<(), String> { self.note(&format!("storage {p}")) }
-        fn make_dir(&self, p: &str) -> Result<(), String> { self.note(&format!("mkdir {p}")) }
-        fn write_restrictive(&self, p: &str, _c: &[u8]) -> Result<(), String> { self.note(&format!("write {p}")) }
-        fn chown(&self, p: &str, _o: &crate::place::Ownership) -> Result<(), String> { self.note(&format!("chown {p}")) }
-        fn chmod(&self, p: &str, _m: u32) -> Result<(), String> { self.note(&format!("chmod {p}")) }
-        fn swap_symlink(&self, l: &str, t: &str) -> Result<(), String> { self.note(&format!("swap {l}->{t}")) }
-        fn remove_dir_all(&self, p: &str) -> Result<(), String> { self.note(&format!("rm {p}")) }
+        fn ensure_secure_storage(&self, p: &str, _u: bool) -> Result<(), String> {
+            self.note(&format!("storage {p}"))
+        }
+        fn make_dir(&self, p: &str) -> Result<(), String> {
+            self.note(&format!("mkdir {p}"))
+        }
+        fn write_restrictive(&self, p: &str, _c: &[u8]) -> Result<(), String> {
+            self.note(&format!("write {p}"))
+        }
+        fn chown(&self, p: &str, _o: &crate::place::Ownership) -> Result<(), String> {
+            self.note(&format!("chown {p}"))
+        }
+        fn chmod(&self, p: &str, _m: u32) -> Result<(), String> {
+            self.note(&format!("chmod {p}"))
+        }
+        fn swap_symlink(&self, l: &str, t: &str) -> Result<(), String> {
+            self.note(&format!("swap {l}->{t}"))
+        }
+        fn remove_dir_all(&self, p: &str) -> Result<(), String> {
+            self.note(&format!("rm {p}"))
+        }
     }
 
     struct OkDec;
     impl Decryptor for OkDec {
-        fn extract(&self, _f: &str, _k: &str) -> Result<Vec<u8>, String> { Ok(b"plaintext".to_vec()) }
+        fn extract(&self, _f: &str, _k: &str) -> Result<Vec<u8>, String> {
+            Ok(b"plaintext".to_vec())
+        }
     }
     struct FailDec;
     impl Decryptor for FailDec {
-        fn extract(&self, _f: &str, _k: &str) -> Result<Vec<u8>, String> { Err("no identity".into()) }
+        fn extract(&self, _f: &str, _k: &str) -> Result<Vec<u8>, String> {
+            Err("no identity".into())
+        }
     }
 
     #[test]
@@ -296,7 +350,10 @@ mod tests {
         // from an empty secret to whatever reads it next.
         let fs = SpyFs::default();
         let _ = apply(&m(), 3, &fs, &FailDec);
-        assert!(!fs.did("write"), "wrote a file for a secret that failed to decrypt");
+        assert!(
+            !fs.did("write"),
+            "wrote a file for a secret that failed to decrypt"
+        );
     }
 
     #[test]
@@ -314,7 +371,10 @@ mod tests {
         let fs = SpyFs::failing("swap");
         let e = apply(&m(), 3, &fs, &OkDec).expect_err("must fail");
         assert!(matches!(e, ApplyError::Swap { .. }), "got {e:?}");
-        assert!(fs.did("write") && fs.did("chmod"), "the generation should be complete");
+        assert!(
+            fs.did("write") && fs.did("chmod"),
+            "the generation should be complete"
+        );
     }
 
     #[test]
@@ -323,7 +383,10 @@ mod tests {
         let r = apply(&m(), 3, &fs, &OkDec).expect("ok");
         assert_eq!(r.written, 1);
         let log = fs.log.borrow();
-        assert!(log.last().is_some_and(|l| l.starts_with("swap")), "swap must be last");
+        assert!(
+            log.last().is_some_and(|l| l.starts_with("swap")),
+            "swap must be last"
+        );
         assert_eq!(log.iter().filter(|l| l.starts_with("swap")).count(), 1);
     }
 
@@ -334,8 +397,14 @@ mod tests {
         let fs = SpyFs::default();
         apply(&m(), 3, &fs, &OkDec).expect("ok");
         let log = fs.log.borrow();
-        let chown = log.iter().position(|l| l.starts_with("chown")).expect("chown");
-        let chmod = log.iter().position(|l| l.starts_with("chmod")).expect("chmod");
+        let chown = log
+            .iter()
+            .position(|l| l.starts_with("chown"))
+            .expect("chown");
+        let chmod = log
+            .iter()
+            .position(|l| l.starts_with("chmod"))
+            .expect("chmod");
         assert!(chown < chmod, "chmod ran before chown — ownership window");
     }
 
@@ -344,7 +413,10 @@ mod tests {
         let fs = SpyFs::default();
         apply(&m(), 3, &fs, &OkDec).expect("ok");
         for line in fs.log.borrow().iter().filter(|l| l.starts_with("write")) {
-            assert!(line.contains("/run/secrets.d/3/"), "escaped the generation: {line}");
+            assert!(
+                line.contains("/run/secrets.d/3/"),
+                "escaped the generation: {line}"
+            );
         }
     }
 }

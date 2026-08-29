@@ -33,14 +33,22 @@ fn uid_of(name: &str) -> Option<u32> {
     // into static storage or null, and we only read it before any other libc
     // call could overwrite it.
     let p = unsafe { libc::getpwnam(c.as_ptr()) };
-    if p.is_null() { None } else { Some(unsafe { (*p).pw_uid }) }
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { (*p).pw_uid })
+    }
 }
 
 fn gid_of(name: &str) -> Option<u32> {
     let c = std::ffi::CString::new(name).ok()?;
     // SAFETY: as above, for getgrnam.
     let p = unsafe { libc::getgrnam(c.as_ptr()) };
-    if p.is_null() { None } else { Some(unsafe { (*p).gr_gid }) }
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { (*p).gr_gid })
+    }
 }
 
 impl Fs for RealFs {
@@ -167,21 +175,132 @@ fn mount_secure(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// The darwin ram disk's size, in 512-byte units.
+///
+/// ★ 131072 = 64 MiB, MEASURED from the live volume on ryn
+/// (`diskutil info /dev/disk4`: "exactly 131072 512-Byte-Units"), not chosen.
+/// Matching upstream matters because the size is a hard ceiling on every
+/// secret a node holds — picking a smaller number would fail a node that
+/// upstream serves fine, and a larger one silently reserves more wired memory.
+#[cfg(target_os = "macos")]
+pub const RAMDISK_SECTORS: u64 = 131_072;
+
+/// Run one command, returning stdout, and treat a non-zero exit as an error.
+///
+/// ★ A typed wrapper over `Command`, not a shell string. The NO-SHELL rule
+/// permits exactly this shape: arguments are separate values, so a path with
+/// a space cannot become two arguments and nothing is word-split.
+#[cfg(target_os = "macos")]
+fn run(program: &str, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{program}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{program} {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Pull the device node out of `hdiutil attach -nomount`'s output.
+///
+/// ★ THE PADDING TRAP, measured on ryn 2026-08-29 rather than assumed.
+/// `hdiutil` pads its output to a fixed column width: the real bytes are
+/// `"/dev/disk6"` followed by 42 spaces and a TAB — **53 bytes for a 10-byte
+/// path**. It is not a tidy one-line answer.
+///
+/// This matters because the failure is DISGUISED. Passing the padded string
+/// on gets you:
+///
+/// ```text
+/// newfs_hfs: cannot create filesystem on /dev/rdisk6		: No such file or directory
+/// ```
+///
+/// — which names a device that looks correct, so the natural reading is "the
+/// device vanished" and the natural fix is a retry or a sleep. The actual
+/// cause is invisible whitespace. Measured exactly this way: a probe that
+/// stripped spaces but not the tab failed here and left a 64 MiB ram disk
+/// attached, because the teardown path could not name the device either.
+///
+/// `str::trim` covers it (it is `char::is_whitespace`, which includes `\t`),
+/// but that is a load-bearing detail rather than an incidental tidy-up, so it
+/// is a named function with a test rather than a `.trim()` someone later
+/// removes as redundant.
+#[cfg(target_os = "macos")]
+fn parse_device_node(raw: &str) -> Result<String, String> {
+    let device = raw.trim();
+    if device.is_empty() {
+        return Err("hdiutil returned no device node".to_owned());
+    }
+    // A second guard: after trimming there must be no INTERIOR whitespace
+    // either. `hdiutil` can list several entries when a volume has partitions;
+    // taking the whole block as one path would produce the same disguised
+    // error as the padding does.
+    if device.split_whitespace().count() != 1 {
+        return Err(format!(
+            "hdiutil returned {} whitespace-separated fields, expected one device node: {device:?}",
+            device.split_whitespace().count()
+        ));
+    }
+    if !device.starts_with("/dev/") {
+        return Err(format!("hdiutil returned a non-device path: {device:?}"));
+    }
+    Ok(device.to_owned())
+}
+
+#[cfg(target_os = "macos")]
 fn mount_secure(path: &str) -> Result<(), String> {
-    // ★ DARWIN IS NOT IMPLEMENTED, AND SAYS SO. Upstream builds a 64 MiB HFS
-    // ram disk with `hdiutil` + `newfs_hfs` — measured on ryn as
-    // `/dev/disk4 on /private/var/run/secrets.d (hfs, nodev, nosuid,
-    // nobrowse)`, and a second one per user in user mode. There is no ramfs
-    // on macOS.
-    //
-    // Returning Ok(()) here would be the worst available outcome: decrypted
-    // secrets on ordinary, persistent, backed-up storage while every caller
-    // believed they were in unswappable memory.
+    // ★ THE DARWIN MECHANISM, measured on ryn rather than inferred:
+    //     /dev/disk4 on /private/var/run/secrets.d (hfs, local, nodev, nosuid, nobrowse)
+    // macOS has no ramfs. Upstream builds an HFS volume on a RAM-backed device,
+    // which achieves the same property by a different route: the backing store
+    // is wired memory, never a file, so it cannot be paged to disk.
+
+    // 1. Allocate the RAM device WITHOUT mounting it. `-nomount` matters:
+    //    letting the system automount would attach it read-write in /Volumes
+    //    under a name we do not control, visible in Finder.
+    let raw = run(
+        "hdiutil",
+        &["attach", "-nomount", &format!("ram://{RAMDISK_SECTORS}")],
+    )?;
+    let device = parse_device_node(&raw)?;
+    let device = device.as_str();
+
+    // 2. Format it. `-v` names the volume; without it the volume is "Untitled"
+    //    and two of them collide in /Volumes.
+    if let Err(e) = run("newfs_hfs", &["-v", "suminuri-secrets", device]) {
+        // ★ DETACH ON FAILURE. A formatted-or-not RAM device left attached is
+        // 64 MiB of wired memory that no later run will reclaim, and rebuilds
+        // are frequent.
+        let _ = run("hdiutil", &["detach", "-force", device]);
+        return Err(e);
+    }
+
+    // 3. Mount it. nobrowse keeps it out of Finder; nodev/nosuid match what
+    //    upstream sets and what the Linux ramfs carries.
+    if let Err(e) = run(
+        "mount",
+        &["-t", "hfs", "-o", "nodev,nosuid,nobrowse", device, path],
+    ) {
+        let _ = run("hdiutil", &["detach", "-force", device]);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn mount_secure(path: &str) -> Result<(), String> {
+    // ★ REFUSES rather than pretending. Returning Ok(()) would place decrypted
+    // secrets on ordinary, persistent storage while every caller believed they
+    // were in unswappable memory.
     Err(format!(
-        "no secure-storage mechanism for {path} on this platform: darwin needs an \
-         hdiutil/newfs_hfs ram disk, which is not implemented. Refusing rather than \
-         writing decrypted secrets to ordinary storage"
+        "no secure-storage mechanism for {path} on this platform: Linux uses ramfs and \
+         darwin an hdiutil ram disk. Refusing rather than writing decrypted secrets to \
+         ordinary storage"
     ))
 }
 
@@ -193,6 +312,7 @@ fn mount_secure(path: &str) -> Result<(), String> {
 ///
 /// Only `ramfs` counts. tmpfs is deliberately NOT accepted for the system
 /// path: it can be swapped, which is the whole distinction.
+#[cfg(target_os = "linux")]
 fn already_secure(path: &str) -> bool {
     let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
         return false;
@@ -202,6 +322,28 @@ fn already_secure(path: &str) -> bool {
         let (_src, target, fstype) = (f.next(), f.next(), f.next());
         target == Some(path) && fstype == Some("ramfs")
     })
+}
+
+/// On darwin, "already secure" means an HFS volume on a RAM-backed device is
+/// mounted here.
+///
+/// ★ `/proc/mounts` does not exist; the mount table comes from `mount(8)`.
+/// The check is by MOUNT POINT and filesystem type — an hfs mount at the
+/// secrets path is one we (or upstream) made, because nothing else mounts hfs
+/// inside `/run` or a runtime directory.
+#[cfg(target_os = "macos")]
+fn already_secure(path: &str) -> bool {
+    let Ok(table) = run("mount", &[]) else {
+        return false;
+    };
+    table
+        .lines()
+        .any(|l| l.contains(&format!(" on {path} ")) && l.contains("hfs"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn already_secure(_path: &str) -> bool {
+    false
 }
 
 /// Decrypts through suminuri, caching one decrypted tree per file.
@@ -215,7 +357,10 @@ pub struct SuminuriDecryptor {
 impl SuminuriDecryptor {
     #[must_use]
     pub fn new(identities: AgeIdentities) -> Self {
-        Self { identities, cache: Mutex::new(HashMap::new()) }
+        Self {
+            identities,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// How many identities this decryptor holds — reported when nothing
@@ -237,7 +382,10 @@ fn at_path<'a>(tree: &'a Value, key: &str) -> Option<&'a Value> {
 
 impl Decryptor for SuminuriDecryptor {
     fn extract(&self, sops_file: &str, key: &str) -> Result<Vec<u8>, String> {
-        let mut cache = self.cache.lock().map_err(|_| "cache poisoned".to_string())?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| "cache poisoned".to_string())?;
         if !cache.contains_key(sops_file) {
             // ★ `load_encrypted` takes the file's CONTENT, not its path.
             // Passing the path parses the FILENAME as YAML, which has no
@@ -245,10 +393,9 @@ impl Decryptor for SuminuriDecryptor {
             // statement about the wrong input. Caught by the first
             // differential run against plo, not by any unit test here,
             // because every unit test built its tree in memory.
-            let raw = std::fs::read_to_string(sops_file)
-                .map_err(|e| format!("read {sops_file}: {e}"))?;
-            let mut file =
-                SopsFile::load_encrypted(&raw).map_err(|e| format!("load: {e}"))?;
+            let raw =
+                std::fs::read_to_string(sops_file).map_err(|e| format!("read {sops_file}: {e}"))?;
+            let mut file = SopsFile::load_encrypted(&raw).map_err(|e| format!("load: {e}"))?;
             let data_key = file
                 .data_key(&self.identities)
                 .map_err(|e| format!("no usable identity ({} held): {e}", self.identities.len()))?;
@@ -276,8 +423,6 @@ impl Decryptor for SuminuriDecryptor {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,7 +449,10 @@ mod tests {
     fn a_slash_path_walks_nested_mappings() {
         // sops-nix's key form, not sops's bracket syntax. Getting this wrong
         // only shows on NESTED keys, which is most of plo's manifest.
-        assert!(matches!(at_path(&nested(), "attic/jwt/token"), Some(Value::Scalar(_))));
+        assert!(matches!(
+            at_path(&nested(), "attic/jwt/token"),
+            Some(Value::Scalar(_))
+        ));
     }
 
     #[test]
@@ -319,7 +467,10 @@ mod tests {
     fn a_partial_path_that_lands_on_a_mapping_is_not_a_leaf() {
         let tree = nested();
         let v = at_path(&tree, "attic/jwt");
-        assert!(matches!(v, Some(Value::Mapping(_))), "must not be mistaken for a scalar");
+        assert!(
+            matches!(v, Some(Value::Mapping(_))),
+            "must not be mistaken for a scalar"
+        );
     }
 
     #[test]
@@ -344,5 +495,54 @@ mod tests {
         assert_eq!(uid_of("root"), Some(0));
         assert!(uid_of("definitely-not-a-user-9f3c").is_none());
         assert!(gid_of("definitely-not-a-group-9f3c").is_none());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod darwin_tests {
+    use super::*;
+
+    /// The EXACT bytes `hdiutil attach -nomount ram://131072` wrote on ryn,
+    /// captured with `od -c`. Not a plausible-looking fixture -- a recording.
+    const REAL_HDIUTIL_OUTPUT: &str = "/dev/disk6                                          \t";
+
+    #[test]
+    fn parses_the_real_padded_hdiutil_output() {
+        // 53 bytes in, 10 out. If this ever reads as already-clean, the
+        // fixture has been "tidied" and the test no longer proves anything.
+        assert_eq!(REAL_HDIUTIL_OUTPUT.len(), 53, "fixture lost its padding");
+        assert_eq!(
+            parse_device_node(REAL_HDIUTIL_OUTPUT).unwrap(),
+            "/dev/disk6"
+        );
+    }
+
+    #[test]
+    fn refuses_empty_output() {
+        // Better to refuse than to hand "" to newfs_hfs, which would report
+        // an error about a path the operator never chose.
+        assert!(parse_device_node("   \t \n ").is_err());
+    }
+
+    #[test]
+    fn refuses_multiple_fields_rather_than_guessing_which_is_the_device() {
+        let multi = "/dev/disk6        \tApple_HFS      \t/Volumes/x";
+        let e = parse_device_node(multi).unwrap_err();
+        assert!(e.contains("expected one device node"), "{e}");
+    }
+
+    #[test]
+    fn refuses_a_non_device_path() {
+        assert!(parse_device_node("/tmp/not-a-device").is_err());
+    }
+
+    /// ★ The size is MEASURED, not chosen. `diskutil info` on the live
+    /// upstream volume reported "exactly 131072 512-Byte-Units"; a smaller
+    /// number would fail a node upstream serves, a larger one silently wires
+    /// more memory.
+    #[test]
+    fn ramdisk_size_matches_the_measured_upstream_volume() {
+        assert_eq!(RAMDISK_SECTORS, 131_072);
+        assert_eq!(RAMDISK_SECTORS * 512 / 1024 / 1024, 64, "should be 64 MiB");
     }
 }
