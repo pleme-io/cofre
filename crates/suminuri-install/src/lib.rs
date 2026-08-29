@@ -47,3 +47,17 @@ pub use apply::{Applied, ApplyError, Decryptor, Fs, apply};
 pub use identity::{IdentityError, Source};
 pub use manifest::{Manifest, ManifestError, Secret};
 pub use place::{PlanError, Step, plan, prune};
+
+// ── ★ THE ENTRY POINT LIVES HERE, NOT IN A BIN ──────────────────────────────
+//
+// Two binaries ship: `suminuri-install-secrets` (the pleme-io-native name) and
+// `sops-install-secrets` (the name sops-nix hardcodes in its manifest builder,
+// its systemd unit and its darwin activation script). They must be the SAME
+// program, so the entry point is a library function both call rather than a
+// file one of them copies.
+//
+// Learned on zek: pointing `sops.package` at a package lacking the second name
+// fails at BUILD time with exit 127, and the differential could not see it —
+// it invoked the binary by absolute path, proving placement byte-identical
+// while never exercising the name the caller resolves.
+pub mod entry;

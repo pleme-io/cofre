@@ -45,3 +45,12 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 [[bin]]
 name = "suminuri-install-secrets"
 path = "src/bin/suminuri-install-secrets.rs"
+
+# ★ THE DROP-IN NAME. sops-nix hardcodes `${cfg.package}/bin/sops-install-secrets`
+# in three places (the manifest builder, the systemd unit, the darwin activation
+# script), so a package without this name fails at BUILD time with exit 127 —
+# which is exactly how the first zek cutover failed. Same program, not a copy:
+# both binaries call `suminuri_install::run()`.
+[[bin]]
+name = "sops-install-secrets"
+path = "src/bin/sops-install-secrets.rs"
