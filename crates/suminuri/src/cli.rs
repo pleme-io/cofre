@@ -262,7 +262,11 @@ pub fn parse(args: &[String]) -> Result<Invocation, ParseError> {
                 .cloned()
                 .ok_or_else(|| ParseError::MissingValue(name.to_string()))
         };
-        let bare = arg.split('=').next().unwrap_or(arg);
+        let bare = if arg.starts_with('-') {
+            arg.split('=').next().unwrap_or(arg)
+        } else {
+            arg.as_str()
+        };
 
         match bare {
             "-d" | "--decrypt" => verb_from_flag = Some(Verb::Decrypt),
@@ -440,6 +444,18 @@ mod tests {
         assert_eq!(p(&["updatekeys", "f.yaml"]).verb, Verb::UpdateKeys);
         assert_eq!(p(&["filestatus", "f.yaml"]).verb, Verb::FileStatus);
         assert_eq!(p(&["rotate", "f.yaml"]).verb, Verb::Rotate);
+    }
+
+    #[test]
+    fn a_set_value_keeps_every_equals_sign() {
+        let inv = p(&["set", "f.yaml", "[\"k\"]", "\"cid-sui-1:ab+c/d==\""]);
+        assert_eq!(inv.path_expr.as_deref(), Some("[\"k\"]"));
+        assert_eq!(inv.value_expr.as_deref(), Some("\"cid-sui-1:ab+c/d==\""));
+        assert_eq!(p(&["a=b.yaml"]).file, Some(PathBuf::from("a=b.yaml")));
+        assert_eq!(
+            p(&["--output=o.yaml", "f.yaml"]).output,
+            Some(PathBuf::from("o.yaml"))
+        );
     }
 
     #[test]
