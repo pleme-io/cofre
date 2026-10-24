@@ -222,7 +222,10 @@ impl AgeIdentities {
             sources.push(IdentitySource::File(p.clone()));
         }
 
-        Ok(Self { identities, sources })
+        Ok(Self {
+            identities,
+            sources,
+        })
     }
 
     /// The identity sources sops supports that this build does not.
@@ -698,11 +701,10 @@ mod tests {
         // THE capability this adds. On a NixOS node the manifest names
         // /etc/ssh/ssh_host_ed25519_key -- the same file sshd serves as a host
         // key -- so the node's ssh host identity IS its decryption identity.
-        let env = MockEnvironment::new()
-            .with_file("/etc/ssh/ssh_host_ed25519_key", &generated_ssh_key());
-        let ids =
-            AgeIdentities::from_paths(&env, &[], &["/etc/ssh/ssh_host_ed25519_key".into()])
-                .expect("from_paths");
+        let env =
+            MockEnvironment::new().with_file("/etc/ssh/ssh_host_ed25519_key", &generated_ssh_key());
+        let ids = AgeIdentities::from_paths(&env, &[], &["/etc/ssh/ssh_host_ed25519_key".into()])
+            .expect("from_paths");
         assert_eq!(ids.len(), 1, "the ssh host key must become an identity");
     }
 
@@ -715,15 +717,15 @@ mod tests {
         let env = MockEnvironment::new()
             .with_file("/k/age.txt", &id.to_string().expose_secret_for_test())
             .with_file("/etc/ssh/host", &generated_ssh_key());
-        let ids = AgeIdentities::from_paths(
-            &env,
-            &["/k/age.txt".into()],
-            &["/etc/ssh/host".into()],
-        )
-        .expect("from_paths");
+        let ids =
+            AgeIdentities::from_paths(&env, &["/k/age.txt".into()], &["/etc/ssh/host".into()])
+                .expect("from_paths");
         assert_eq!(ids.len(), 2);
         assert_eq!(ids.sources()[0], IdentitySource::File("/k/age.txt".into()));
-        assert_eq!(ids.sources()[1], IdentitySource::File("/etc/ssh/host".into()));
+        assert_eq!(
+            ids.sources()[1],
+            IdentitySource::File("/etc/ssh/host".into())
+        );
     }
 
     #[test]
