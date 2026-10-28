@@ -389,7 +389,7 @@ pub fn run_editor_hook(plaintext_path: &std::path::Path) -> std::io::Result<()> 
     // A LOUD REFUSAL, *NOT* COMMENT PRESERVATION. Stated precisely because the first
     // version of this comment claimed preservation and was wrong.
     //
-    // `serde_yaml::Value` has no variant for a comment, so `from_str` → `to_string`
+    // `serde_norway::Value` has no variant for a comment, so `from_str` → `to_string`
     // silently DELETED every comment in the file. Style went with it: block scalars
     // collapsed and quoting was re-decided by serde's rules.
     //

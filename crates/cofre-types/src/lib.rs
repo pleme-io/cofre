@@ -354,14 +354,14 @@ impl SecretMaterializationPlan {
 
     /// Read a plan from a YAML string. Validates schema and content.
     pub fn from_yaml(s: &str) -> Result<Self, PlanError> {
-        let plan: Self = serde_yaml::from_str(s).map_err(PlanError::Parse)?;
+        let plan: Self = serde_norway::from_str(s).map_err(PlanError::Parse)?;
         plan.validate()?;
         Ok(plan)
     }
 
     /// Render the plan to YAML.
     pub fn to_yaml(&self) -> Result<String, PlanError> {
-        serde_yaml::to_string(self).map_err(PlanError::Serialize)
+        serde_norway::to_string(self).map_err(PlanError::Serialize)
     }
 }
 
@@ -372,9 +372,9 @@ impl SecretMaterializationPlan {
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
     #[error("plan parse failure: {0}")]
-    Parse(serde_yaml::Error),
+    Parse(serde_norway::Error),
     #[error("plan serialize failure: {0}")]
-    Serialize(serde_yaml::Error),
+    Serialize(serde_norway::Error),
     #[error("unsupported apiVersion: {0:?} (expected {expected:?})", expected = SecretMaterializationPlan::API_VERSION)]
     UnsupportedApiVersion(String),
     #[error("unexpected kind: {0:?} (expected {expected:?})", expected = SecretMaterializationPlan::KIND)]

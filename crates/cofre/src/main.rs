@@ -374,7 +374,7 @@ async fn cmd_inventory(manifest: &str) -> i32 {
         plan: plan.metadata.name.clone(),
         entries,
     };
-    match serde_yaml::to_string(&inv) {
+    match serde_norway::to_string(&inv) {
         Ok(s) => {
             println!("{s}");
             0
