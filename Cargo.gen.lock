@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "37fe8242e8cd389cabcdd538bac7ba8501f5f9d032787df584b4e74dd8783c61",
+  "cargo_lock_sha256": "bcbef34e3b14f3e4838104a7403ec05a5cd4a96f7f5260b98cb96195718b2d21",
   "manifest_sha256": {
-    "Cargo.toml": "2b421e9c81f9729bde978ce3fa1a2a5dbc5964abcce2a7536c68e9fc791f04e8",
+    "Cargo.toml": "f870fd032f1a60d877ea44f687538dc77bfd50f8f1dfd3db0287a4305906413d",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "dfb11326535b7ff0485efca2c41ca7a2a4a80c2e51c973b3bfd8ab7ae527414f",
@@ -1341,7 +1341,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "cofre-0.1.31": {
+      "cofre-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "akeyless_api",
@@ -1378,7 +1378,7 @@
           },
           {
             "name": "cofre_types",
-            "package_key": "cofre-types-0.1.31",
+            "package_key": "cofre-types-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1430,7 +1430,7 @@
           },
           {
             "name": "suminuri_yaml",
-            "package_key": "suminuri-yaml-0.1.31",
+            "package_key": "suminuri-yaml-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1493,17 +1493,17 @@
           "default"
         ]
       },
-      "cofre-fs-0.1.31": {
+      "cofre-fs-0.1.32": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-secret-0.1.31": {
+      "cofre-secret-0.1.32": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
-      "cofre-types-0.1.31": {
+      "cofre-types-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "gen_platform",
@@ -8708,7 +8708,7 @@
           "std"
         ]
       },
-      "suminuri-0.1.31": {
+      "suminuri-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "age",
@@ -8738,7 +8738,7 @@
           },
           {
             "name": "suminuri_wire",
-            "package_key": "suminuri-wire-0.1.31",
+            "package_key": "suminuri-wire-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8748,7 +8748,7 @@
           },
           {
             "name": "suminuri_yaml",
-            "package_key": "suminuri-yaml-0.1.31",
+            "package_key": "suminuri-yaml-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8782,7 +8782,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "suminuri-install-0.1.31": {
+      "suminuri-install-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "age",
@@ -8831,7 +8831,7 @@
           },
           {
             "name": "suminuri",
-            "package_key": "suminuri-0.1.31",
+            "package_key": "suminuri-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8841,7 +8841,7 @@
           },
           {
             "name": "suminuri_wire",
-            "package_key": "suminuri-wire-0.1.31",
+            "package_key": "suminuri-wire-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8851,7 +8851,7 @@
           },
           {
             "name": "suminuri_yaml",
-            "package_key": "suminuri-yaml-0.1.31",
+            "package_key": "suminuri-yaml-0.1.32",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8863,7 +8863,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "suminuri-wire-0.1.31": {
+      "suminuri-wire-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "aes",
@@ -8973,7 +8973,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "suminuri-yaml-0.1.31": {
+      "suminuri-yaml-0.1.32": {
         "runtime_dependencies": [
           {
             "name": "libyaml_safer",
@@ -13433,7 +13433,7 @@
     "clap_lex-1.1.0": {
       "edition": "2024"
     },
-    "cofre-0.1.31": {
+    "cofre-0.1.32": {
       "edition": "2024",
       "binaries": [
         {
@@ -13442,21 +13442,21 @@
         }
       ]
     },
-    "cofre-fs-0.1.31": {
+    "cofre-fs-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_fs",
         "path": "src/lib.rs"
       }
     },
-    "cofre-secret-0.1.31": {
+    "cofre-secret-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_secret",
         "path": "src/lib.rs"
       }
     },
-    "cofre-types-0.1.31": {
+    "cofre-types-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "cofre_types",
@@ -14153,7 +14153,7 @@
     "subtle-2.6.1": {
       "edition": "2018"
     },
-    "suminuri-0.1.31": {
+    "suminuri-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri",
@@ -14166,7 +14166,7 @@
         }
       ]
     },
-    "suminuri-install-0.1.31": {
+    "suminuri-install-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri_install",
@@ -14183,14 +14183,14 @@
         }
       ]
     },
-    "suminuri-wire-0.1.31": {
+    "suminuri-wire-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri_wire",
         "path": "src/lib.rs"
       }
     },
-    "suminuri-yaml-0.1.31": {
+    "suminuri-yaml-0.1.32": {
       "edition": "2024",
       "lib_target": {
         "name": "suminuri_yaml",
