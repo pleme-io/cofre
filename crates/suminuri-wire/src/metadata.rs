@@ -21,7 +21,7 @@
 //! [`Metadata::from_wrapped`] from the set of [`WrappedKey`]s that actually
 //! exist, and the arrays are a *projection* of that set. A `Metadata` whose
 //! `age:` list names a recipient with no wrapped key has no constructor —
-//! **truly-unrep**, in the sense `UNREPRESENTABILITY.md` reserves for an absent
+//! **truly-unrep**, in the sense of an absent
 //! code path rather than a guarded one.
 //!
 //! What this does *not* do is police `.sops.yaml`. Comparing a config's declared

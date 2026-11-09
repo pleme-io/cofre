@@ -21,7 +21,7 @@
 //!
 //! # The illegal states that have no code path here
 //!
-//! Named first, then removed — the ordering `UNREPRESENTABILITY.md` §IV asks for.
+//! Named first, then removed, in that order.
 //!
 //! 1. **A 12-byte nonce.** sops uses a **32-byte** GCM nonce ([`Iv::LEN`]).
 //!    Every mainstream AES-GCM API defaults to 12, so the wrong choice compiles,
