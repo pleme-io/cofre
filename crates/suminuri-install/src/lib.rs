@@ -22,8 +22,8 @@
 //!
 //! The manifest's `ageSshKeyPaths` names `/etc/ssh/ssh_host_ed25519_key`, and
 //! `sshKeyPaths` names the RSA one. A node's **ssh host identity IS its
-//! secret-decryption identity** — which is why `theory/NATURALIZE-NIXOS.md`
-//! records the sshd row and this one as two ends of a single path, sharing
+//! secret-decryption identity** — so the sshd row and this one are
+//! two ends of a single path, sharing
 //! exactly one constraint: *never regenerate the host keys*.
 //!
 //! ── STATUS ─────────────────────────────────────────────────────────────

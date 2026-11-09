@@ -2,7 +2,7 @@
   "schema_version": 2,
   "cargo_lock_sha256": "b876ba31bcb2f3d8e1c5ca8359f356ba73c418dba59791942c84b6f612ed91a5",
   "manifest_sha256": {
-    "Cargo.toml": "f7daa13a53d4ed4b53bf50f2687c663992b9ff73837f6033727f54a6217495ec",
+    "Cargo.toml": "b856ceb5f58558458a72c199879cc3fcaaa026b148dc841c92a7362ae093a7d9",
     "crates/cofre-fs/Cargo.toml": "de4528b9de2bf2f2601262c9d852571136883a7f321de573eff9a9964ff97902",
     "crates/cofre-secret/Cargo.toml": "8b23c7e828a7798ff51ffc2a58de009dc9e51399e69e1e18232ab0248ed9949a",
     "crates/cofre-types/Cargo.toml": "dfb11326535b7ff0485efca2c41ca7a2a4a80c2e51c973b3bfd8ab7ae527414f",

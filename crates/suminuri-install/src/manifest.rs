@@ -120,7 +120,7 @@ pub struct Manifest {
     /// SSH host keys to derive an age identity from.
     ///
     /// ★ THIS is the node's secret-decryption identity, and it is the same
-    /// file its sshd serves as a host key. See theory/NATURALIZE-NIXOS.md:
+    /// file its sshd serves as a host key:
     /// the sshd row and this one are two ends of one identity path.
     #[serde(rename = "ageSshKeyPaths", default)]
     pub age_ssh_key_paths: Vec<String>,

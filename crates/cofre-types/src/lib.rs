@@ -243,7 +243,6 @@ impl BackendKind {
 // Fleet-wide dispatcher-catalog registration for the cofre secret-
 // source surface. Substrate gains typed coverage over the resource
 // side of secret materialization — same algebraic laws apply.
-// See theory/UNIFIED-COMPUTING-MODEL.md §VI.
 gen_platform::register_dispatcher!("cofre.backend-kind", BackendKind);
 
 // ══════════════════════════════════════════════════════════════════════
@@ -955,7 +954,7 @@ mod tests {
         assert_eq!(RotationPolicy::Never.overdue_after_days(), None);
     }
 
-    /// theory/SELF-BOOTSTRAP-AKEYLESS.md's M0 step 1 -- the typed
+    /// Self-bootstrap M0 step 1 -- the typed
     /// SecretMaterializationPlans declaring the fleet's real bootstrap
     /// secrets (mirroring the emitting Go tool's exact
     /// defaultSpec/GenerateSecureSecrets shape) validate against cofre's

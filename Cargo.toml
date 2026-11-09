@@ -40,7 +40,7 @@ suminuri-wire = { path = "crates/suminuri-wire", version = "0.1.30" }
 suminuri-yaml = { path = "crates/suminuri-yaml", version = "0.1.30" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
-# catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
+# catalog integration.
 gen-platform = "0.1"
 gen-types = "0.1"
 

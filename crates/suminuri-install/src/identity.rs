@@ -4,8 +4,7 @@
 //!
 //! sops-nix hands us `ageSshKeyPaths` (`/etc/ssh/ssh_host_ed25519_key`) and
 //! `ageKeyFile` (`/var/lib/sops-nix/key.txt`). The first is the same file the
-//! node's sshd serves as a host key — which is why
-//! `theory/NATURALIZE-NIXOS.md` records the sshd row and this one as two ends
+//! node's sshd serves as a host key — so the sshd row and this one are two ends
 //! of a single identity path, sharing exactly one constraint: **never
 //! regenerate the host keys**.
 //!
